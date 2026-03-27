@@ -89,4 +89,8 @@ router.get('/google/callback', async (req, res) => {
   }
 });
 
+router.get('/config', (req, res) => {
+  res.json({ clientId: process.env.GOOGLE_CLIENT_ID });
+});
+
 module.exports = router;

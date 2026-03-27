@@ -1,96 +1,161 @@
 const express = require('express');
-const { google } = require('googleapis');
 const router = express.Router();
+const { google } = require('googleapis');
+const { PDFDocument, rgb, StandardFonts } = require('pdf-lib');
+const fontkit = require('@pdf-lib/fontkit');
+const axios = require('axios');
 
-router.post('/generate', async (req, res) => {
-  const { sheetId, templateId, folderId, nameColumn, emailColumn } = req.body;
+function getGoogleAuth(accessToken) {
   const auth = new google.auth.OAuth2();
-  auth.setCredentials({ access_token: req.user.accessToken });
-  const drive = google.drive({ version: 'v3', auth });
-  const slides = google.slides({ version: 'v1', auth });
+  auth.setCredentials({ access_token: accessToken });
+  return auth;
+}
+
+function hexToRgb(hex) {
+  const r = parseInt(hex.slice(1, 3), 16) / 255;
+  const g = parseInt(hex.slice(3, 5), 16) / 255;
+  const b = parseInt(hex.slice(5, 7), 16) / 255;
+  return { r, g, b };
+}
+
+// Auto-create a Drive folder and return its ID
+async function getOrCreateFolder(drive, campaignName) {
+  const folderName = `CertiFlow — ${campaignName}`;
+  const existing = await drive.files.list({
+    q: `name='${folderName}' and mimeType='application/vnd.google-apps.folder' and trashed=false`,
+    fields: 'files(id, name)',
+  });
+  if (existing.data.files.length > 0) return existing.data.files[0].id;
+  const folder = await drive.files.create({
+    requestBody: {
+      name: folderName,
+      mimeType: 'application/vnd.google-apps.folder',
+    },
+    fields: 'id',
+  });
+  return folder.data.id;
+}
+
+// Generate certificates from custom template (no Slides needed)
+router.post('/generate', async (req, res) => {
+  const { campaignName, template, participants, nameCol, emailCol, sheetId, writeBack } = req.body;
+
+  if (!template || !participants?.length) {
+    return res.status(400).json({ error: 'Missing template or participants' });
+  }
+
+  const auth  = getGoogleAuth(req.user.accessToken);
+  const drive  = google.drive({ version: 'v3', auth });
   const sheets = google.sheets({ version: 'v4', auth });
 
-  const sheetData = await sheets.spreadsheets.values.get({ spreadsheetId: sheetId, range: 'Sheet1!A:Z' });
-  const rows = sheetData.data.values;
-  const headers = rows[0];
-  const nameIdx = headers.indexOf(nameColumn);
+  // Auto-create Drive folder
+  let folderId;
+  try {
+    folderId = await getOrCreateFolder(drive, campaignName || 'Certificates');
+  } catch (e) {
+    return res.status(500).json({ error: 'Could not create Drive folder: ' + e.message });
+  }
+
   const results = [];
 
-  for (let i = 1; i < rows.length; i++) {
-    const participantName = rows[i][nameIdx];
+  for (let i = 0; i < participants.length; i++) {
+    const row = participants[i];
+    const name = row[nameCol] || `Person ${i + 1}`;
+
     try {
-      const copy = await drive.files.copy({ fileId: templateId, requestBody: { name: `Certificate_${participantName}`, parents: [folderId] } });
-      await slides.presentations.batchUpdate({ presentationId: copy.data.id, requestBody: { requests: [{ replaceAllText: { containsText: { text: '{{name}}' }, replaceText: participantName } }] } });
-      const pdfStream = await drive.files.export({ fileId: copy.data.id, mimeType: 'application/pdf' }, { responseType: 'stream' });
-      const uploaded = await drive.files.create({ requestBody: { name: `${participantName}_Certificate.pdf`, parents: [folderId] }, media: { mimeType: 'application/pdf', body: pdfStream.data } });
-      await drive.permissions.create({ fileId: uploaded.data.id, requestBody: { role: 'reader', type: 'anyone' } });
-      const fileInfo = await drive.files.get({ fileId: uploaded.data.id, fields: 'webViewLink' });
-      await drive.files.delete({ fileId: copy.data.id });
-      results.push({ name: participantName, link: fileInfo.data.webViewLink, status: 'done' });
-    } catch (err) {
-      results.push({ name: participantName, status: 'failed', error: err.message });
-    }
-  }
-  res.json({ results });
-});
+      // 1. Create PDF from template
+      const pdfDoc = await PDFDocument.create();
+      pdfDoc.registerFontkit(fontkit);
+      const page = pdfDoc.addPage([template.width, template.height]);
 
-// Single certificate generation (used by combined pipeline)
-router.post('/generate-one', async (req, res) => {
-  const { participantName, templateId, folderId, replacements, sheetId, rowIndex } = req.body;
-  const auth = new google.auth.OAuth2();
-  auth.setCredentials({ access_token: req.user.accessToken });
-  const drive  = google.drive({ version: 'v3', auth });
-  const slides = google.slides({ version: 'v1', auth });
-  const sheets = google.sheets({ version: 'v4', auth });
+      // 2. Draw background image if present
+      if (template.backgroundBase64) {
+        const imgData = template.backgroundBase64.replace(/^data:image\/(png|jpeg|jpg);base64,/, '');
+        const imgBytes = Buffer.from(imgData, 'base64');
+        const isJpg = template.backgroundBase64.includes('jpeg') || template.backgroundBase64.includes('jpg');
+        const img = isJpg ? await pdfDoc.embedJpg(imgBytes) : await pdfDoc.embedPng(imgBytes);
+        page.drawImage(img, { x: 0, y: 0, width: template.width, height: template.height });
+      } else {
+        // White background
+        page.drawRectangle({ x: 0, y: 0, width: template.width, height: template.height, color: rgb(1, 1, 1) });
+      }
 
-  try {
-    // 1. Copy template
-    const copy = await drive.files.copy({
-      fileId: templateId,
-      requestBody: { name: `Certificate_${participantName}`, parents: [folderId] },
-    });
+      // 3. Draw each text field
+      for (const field of template.fields) {
+        let text = field.placeholder;
+        // Replace placeholders with actual data
+        Object.keys(row).forEach(col => {
+          text = text.replace(new RegExp(`{{${col}}}`, 'gi'), row[col] || '');
+        });
+        // Also replace by mapped column name
+        if (field.column && row[field.column]) {
+          text = row[field.column];
+        }
 
-    // 2. Replace all placeholders
-    const requests = Object.entries(replacements).map(([ph, val]) => ({
-      replaceAllText: { containsText: { text: `{{${ph}}}` }, replaceText: val }
-    }));
-    await slides.presentations.batchUpdate({
-      presentationId: copy.data.id,
-      requestBody: { requests },
-    });
+        const fontMap = {
+          'Helvetica': StandardFonts.Helvetica,
+          'Times New Roman': StandardFonts.TimesRoman,
+          'Courier': StandardFonts.Courier,
+          'Helvetica Bold': StandardFonts.HelveticaBold,
+          'Times Bold': StandardFonts.TimesRomanBold,
+        };
+        const font = await pdfDoc.embedFont(fontMap[field.fontFamily] || StandardFonts.Helvetica);
+        const col  = hexToRgb(field.color || '#000000');
 
-    // 3. Export PDF + re-upload
-    const pdfStream = await drive.files.export(
-      { fileId: copy.data.id, mimeType: 'application/pdf' },
-      { responseType: 'stream' }
-    );
-    const uploaded = await drive.files.create({
-      requestBody: { name: `${participantName}_Certificate.pdf`, parents: [folderId] },
-      media: { mimeType: 'application/pdf', body: pdfStream.data },
-    });
+        // Convert % positions to absolute (PDF y is from bottom)
+        const x = (field.x / 100) * template.width;
+        const y = template.height - (field.y / 100) * template.height - field.fontSize;
 
-    // 4. Make shareable
-    await drive.permissions.create({
-      fileId: uploaded.data.id,
-      requestBody: { role: 'reader', type: 'anyone' },
-    });
-    const fileInfo = await drive.files.get({ fileId: uploaded.data.id, fields: 'webViewLink' });
-    await drive.files.delete({ fileId: copy.data.id });
+        // Center alignment
+        if (field.align === 'center') {
+          const textWidth = font.widthOfTextAtSize(text, field.fontSize);
+          const fieldWidth = (field.width / 100) * template.width;
+          const centeredX  = x + (fieldWidth - textWidth) / 2;
+          page.drawText(text, { x: centeredX, y, size: field.fontSize, font, color: rgb(col.r, col.g, col.b) });
+        } else {
+          page.drawText(text, { x, y, size: field.fontSize, font, color: rgb(col.r, col.g, col.b) });
+        }
+      }
 
-    // 5. Write back to Sheet if requested
-    if (sheetId && rowIndex !== undefined) {
-      await sheets.spreadsheets.values.update({
-        spreadsheetId: sheetId,
-        range: `Sheet1!Z${rowIndex + 2}`,
-        valueInputOption: 'RAW',
-        requestBody: { values: [[fileInfo.data.webViewLink]] },
+      const pdfBytes = await pdfDoc.save();
+
+      // 4. Upload PDF to Drive
+      const { Readable } = require('stream');
+      const stream = Readable.from(Buffer.from(pdfBytes));
+      const uploaded = await drive.files.create({
+        requestBody: { name: `${name}_Certificate.pdf`, parents: [folderId] },
+        media: { mimeType: 'application/pdf', body: stream },
+        fields: 'id, webViewLink',
       });
-    }
 
-    res.json({ link: fileInfo.data.webViewLink });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
+      // 5. Make shareable
+      await drive.permissions.create({
+        fileId: uploaded.data.id,
+        requestBody: { role: 'reader', type: 'anyone' },
+      });
+
+      const link = uploaded.data.webViewLink;
+
+      // 6. Write back to Sheet
+      if (writeBack && sheetId) {
+        await sheets.spreadsheets.values.update({
+          spreadsheetId: sheetId,
+          range: `Sheet1!Z${i + 2}`,
+          valueInputOption: 'RAW',
+          requestBody: { values: [[link]] },
+        });
+      }
+
+      results.push({ name, email: row[emailCol] || '', link, status: 'success' });
+
+    } catch (err) {
+      console.error(`Failed for ${name}:`, err.message);
+      results.push({ name, email: row[emailCol] || '', link: '', status: 'failed', error: err.message });
+    }
   }
+
+  const folderLink = `https://drive.google.com/drive/folders/${folderId}`;
+  res.json({ results, folderId, folderLink, total: participants.length, success: results.filter(r => r.status === 'success').length });
 });
 
 module.exports = router;
