@@ -35,8 +35,39 @@ router.get('/google/callback', async (req, res) => {
   try {
     const { tokens } = await oauth2Client.getToken(code);
     oauth2Client.setCredentials(tokens);
+
+    // Get user profile from Google
     const oauth2 = google.oauth2({ version: 'v2', auth: oauth2Client });
     const { data: profile } = await oauth2.userinfo.get();
+
+    // Save/update user in Supabase
+    const { createClient } = require('@supabase/supabase-js');
+    const supabase = createClient(
+      process.env.SUPABASE_URL,
+      process.env.SUPABASE_KEY
+    );
+
+    const { data: user, error } = await supabase
+      .from('users')
+      .upsert({
+        google_id: profile.id,
+        email: profile.email,
+        name: profile.name,
+        picture: profile.picture,
+        account_type: accountType,
+        access_token: tokens.access_token,
+        refresh_token: tokens.refresh_token || null,
+      }, { onConflict: 'google_id' })
+      .select()
+      .single();
+
+    if (error) {
+      console.error('Supabase error:', error.message);
+    } else {
+      console.log('User saved:', user.email);
+    }
+
+    // Issue JWT with user data
     const jwtToken = jwt.sign(
       {
         googleId: profile.id,
@@ -50,6 +81,7 @@ router.get('/google/callback', async (req, res) => {
       process.env.JWT_SECRET,
       { expiresIn: '7d' }
     );
+
     res.redirect(`${process.env.FRONTEND_URL}/dashboard.html?token=${jwtToken}`);
   } catch (err) {
     console.error('OAuth error:', err.message);
