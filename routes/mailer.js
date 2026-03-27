@@ -24,5 +24,20 @@ router.post('/send', async (req, res) => {
   }
   res.json({ results });
 });
-
+// Single email send (used by combined pipeline)
+router.post('/send-one', async (req, res) => {
+  const { to, subject, html } = req.body;
+  const auth = new google.auth.OAuth2();
+  auth.setCredentials({ access_token: req.user.accessToken });
+  const gmail = google.gmail({ version: 'v1', auth });
+  const raw = Buffer.from(
+    `To: ${to}\r\nSubject: ${subject}\r\nMIME-Version: 1.0\r\nContent-Type: text/html; charset=utf-8\r\n\r\n${html}`
+  ).toString('base64url');
+  try {
+    await gmail.users.messages.send({ userId: 'me', requestBody: { raw } });
+    res.json({ status: 'sent' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
 module.exports = router;
