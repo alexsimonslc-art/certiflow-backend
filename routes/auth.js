@@ -3,6 +3,12 @@ const { google } = require('googleapis');
 const jwt = require('jsonwebtoken');
 require('dotenv').config();
 
+const { createClient } = require('@supabase/supabase-js');
+    const supabase = createClient(
+      process.env.SUPABASE_URL,
+      process.env.SUPABASE_KEY
+    );
+    
 const router = express.Router();
 
 const oauth2Client = new google.auth.OAuth2(
@@ -43,11 +49,16 @@ router.get('/google/callback', async (req, res) => {
     const { data: profile } = await oauth2.userinfo.get();
 
     // Save/update user in Supabase
-    const { createClient } = require('@supabase/supabase-js');
-    const supabase = createClient(
-      process.env.SUPABASE_URL,
-      process.env.SUPABASE_KEY
-    );
+    
+
+    // Fetch existing refresh_token from DB first
+    const { data: existing } = await supabase
+      .from('users')
+      .select('refresh_token')
+      .eq('google_id', profile.id)
+      .single();
+
+    const refreshToken = tokens.refresh_token || existing?.refresh_token || null;
 
     const { data: user, error } = await supabase
       .from('users')
@@ -58,7 +69,7 @@ router.get('/google/callback', async (req, res) => {
         picture: profile.picture,
         account_type: accountType,
         access_token: tokens.access_token,
-        refresh_token: tokens.refresh_token || null,
+        refresh_token: refreshToken,  // ✅ preserves existing if Google didn't send new one
       }, { onConflict: 'google_id' })
       .select()
       .single();
@@ -78,7 +89,7 @@ router.get('/google/callback', async (req, res) => {
         picture: profile.picture,
         accountType,
         accessToken: tokens.access_token,
-        refreshToken: tokens.refresh_token,
+        refreshToken: refreshToken, 
       },
       process.env.JWT_SECRET,
       { expiresIn: '7d' }
@@ -90,6 +101,7 @@ router.get('/google/callback', async (req, res) => {
     res.redirect(`${process.env.FRONTEND_URL}/login.html?error=auth_failed`);
   }
 });
+
 
 router.get('/config', (req, res) => {
   res.json({ clientId: process.env.GOOGLE_CLIENT_ID });
