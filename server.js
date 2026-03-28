@@ -8,7 +8,7 @@ const mailerRoutes = require('./routes/mailer');
 const certRoutes = require('./routes/certificates');
 const sheetsRoutes = require('./routes/sheets');
 const { verifyToken } = require('./middleware/authMiddleware');
-
+const quotaRoutes  = require('./routes/quota');  
 const app = express();
 
 // ── CORS Fix ──────────────────────────────────────────────────
@@ -46,9 +46,10 @@ app.use('/auth', authRoutes);
 app.use('/api/mail', verifyToken, mailerRoutes);
 app.use('/api/certificates', verifyToken, certRoutes);
 app.use('/api/sheets', verifyToken, sheetsRoutes);
-
+app.use('/api/quota', verifyToken, quotaRoutes); 
 app.get('/health', (req, res) => res.json({ status: 'ok' }));
 
 app.listen(process.env.PORT || 3000, () =>
   console.log(`CertiFlow backend running on port ${process.env.PORT}`)
 );
+
