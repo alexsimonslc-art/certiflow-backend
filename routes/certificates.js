@@ -5,12 +5,6 @@ const { PDFDocument, rgb, StandardFonts } = require('pdf-lib');
 const fontkit = require('@pdf-lib/fontkit');
 const axios = require('axios');
 
-function getGoogleAuth(accessToken) {
-  const auth = new google.auth.OAuth2();
-  auth.setCredentials({ access_token: accessToken });
-  return auth;
-}
-
 function hexToRgb(hex) {
   const r = parseInt(hex.slice(1, 3), 16) / 255;
   const g = parseInt(hex.slice(3, 5), 16) / 255;
@@ -20,7 +14,7 @@ function hexToRgb(hex) {
 
 // Auto-create a Drive folder and return its ID
 async function getOrCreateFolder(drive, campaignName) {
-  const folderName = `CertiFlow — ${campaignName}`;
+  const folderName = `Honourix — ${campaignName}`;
   const existing = await drive.files.list({
     q: `name='${folderName}' and mimeType='application/vnd.google-apps.folder' and trashed=false`,
     fields: 'files(id, name)',
@@ -44,9 +38,8 @@ router.post('/generate', async (req, res) => {
     return res.status(400).json({ error: 'Missing template or participants' });
   }
 
-  const auth  = getGoogleAuth(req.user.accessToken);
-  const drive  = google.drive({ version: 'v3', auth });
-  const sheets = google.sheets({ version: 'v4', auth });
+  const drive  = google.drive({ version: 'v3', auth: req.oauth2Client });
+  const sheets = google.sheets({ version: 'v4', auth: req.oauth2Client });
 
   // Auto-create Drive folder
   let folderId;

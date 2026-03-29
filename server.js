@@ -50,6 +50,6 @@ app.use('/api/quota', verifyToken, quotaRoutes);
 app.get('/health', (req, res) => res.json({ status: 'ok' }));
 
 app.listen(process.env.PORT || 3000, () =>
-  console.log(`CertiFlow backend running on port ${process.env.PORT}`)
+  console.log(`Honourix backend running on port ${process.env.PORT}`)
 );
 
