@@ -101,15 +101,29 @@ router.post('/generate', async (req, res) => {
 
       // 2. Draw background image if present
       if (template.backgroundBase64) {
-        const imgData = template.backgroundBase64.replace(/^data:image\/(png|jpeg|jpg);base64,/, '');
-        const imgBytes = Buffer.from(imgData, 'base64');
-        const isJpg = template.backgroundBase64.includes('jpeg') || template.backgroundBase64.includes('jpg');
-        const img = isJpg ? await pdfDoc.embedJpg(imgBytes) : await pdfDoc.embedPng(imgBytes);
-        page.drawImage(img, { x: 0, y: 0, width: template.width, height: template.height });
-      } else {
-        // White background
-        page.drawRectangle({ x: 0, y: 0, width: template.width, height: template.height, color: rgb(1, 1, 1) });
+      // ✅ Extract MIME type cleanly from the prefix only
+      const match = template.backgroundBase64.match(/^data:image\/(png|jpeg|jpg|webp);base64,/);
+      
+      if (!match) {
+        return res.status(400).json({ error: 'Unsupported image format. Use PNG or JPEG.' });
       }
+
+      const mimeType = match[1].toLowerCase(); // safely get 'jpeg', 'jpg', or 'png'
+      const base64Data = template.backgroundBase64.replace(/^data:image\/\w+;base64,/, '');
+      const imgBytes = Buffer.from(base64Data, 'base64');
+
+      let img;
+      if (mimeType === 'jpeg' || mimeType === 'jpg') {
+        img = await pdfDoc.embedJpg(imgBytes);
+      } else {
+        img = await pdfDoc.embedPng(imgBytes);
+      }
+
+      page.drawImage(img, { x: 0, y: 0, width: template.width, height: template.height });
+
+    } else {
+      page.drawRectangle({ x: 0, y: 0, width: template.width, height: template.height, color: rgb(1, 1, 1) });
+    }
 
       // 3. Draw each text field
       for (const field of template.fields) {
