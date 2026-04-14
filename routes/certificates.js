@@ -93,27 +93,47 @@ router.post('/generate', async (req, res) => {
           'Times Bold':     StandardFonts.TimesRomanBold,
         };
 
+        // TTF URLs — pdf-lib CANNOT embed woff2, only ttf/otf
         const GOOGLE_FONT_URLS = {
-          'Montserrat':         'https://fonts.gstatic.com/s/montserrat/v26/JTUSjIg1_i6t8kCHKm459Wlhyw.woff2',
-          'Raleway':            'https://fonts.gstatic.com/s/raleway/v28/1Ptxg8zYS_SKggPN4iEgvnHyvveLxVvaorCIPrE.woff2',
-          'Plus Jakarta Sans':  'https://fonts.gstatic.com/s/plusjakartasans/v8/LDIoaomQNQcsA88c7O9yZ4KMCoOg4Ko20yygg7c.woff2',
-          'EB Garamond':        'https://fonts.gstatic.com/s/ebgaramond/v26/SlGDmQSNjdsmc35JDF1K5E55YMjF_7DPuGi-6_RUA4V-e6yHgQ.woff2',
-          'Playfair Display':   'https://fonts.gstatic.com/s/playfairdisplay/v36/nuFvD-vYSZviVYUb_rj3ij__anPXJzDwcbmjWBN2PKdFvUDQ.woff2',
-          'Cormorant Garamond': 'https://fonts.gstatic.com/s/cormorantgaramond/v16/co3WmX5slCNuHLi8bLeY9MK7whWMhyjYqXtK.woff2',
-          'Dancing Script':     'https://fonts.gstatic.com/s/dancingscript/v25/If2cXTr6YS-zF4S-kcSWSVi_sxjsohD9F50Ruu7BMSo3Sup5.woff2',
-          'Cinzel':             'https://fonts.gstatic.com/s/cinzel/v23/8vIU7ww63mVu7gt79mT7.woff2',
-          'JetBrains Mono':     'https://fonts.gstatic.com/s/jetbrainsmono/v18/tDbY2o-flEEny0FZhsfKu5WU4zr3E_BX0PnT8RD8yKxTOlOV.woff2',
+          'Montserrat':         { regular: 'https://raw.githubusercontent.com/google/fonts/main/ofl/montserrat/Montserrat%5Bwght%5D.ttf' },
+          'Montserrat-Bold':    { regular: 'https://raw.githubusercontent.com/google/fonts/main/ofl/montserrat/Montserrat%5Bwght%5D.ttf' },
+          'Raleway':            { regular: 'https://raw.githubusercontent.com/google/fonts/main/ofl/raleway/Raleway%5Bwght%5D.ttf' },
+          'Plus Jakarta Sans':  { regular: 'https://raw.githubusercontent.com/google/fonts/main/ofl/plusjakartasans/PlusJakartaSans%5Bwght%5D.ttf' },
+          'EB Garamond':        { regular: 'https://raw.githubusercontent.com/google/fonts/main/ofl/ebgaramond/EBGaramond%5Bwght%5D.ttf' },
+          'Playfair Display':   { regular: 'https://raw.githubusercontent.com/google/fonts/main/ofl/playfairdisplay/PlayfairDisplay%5Bwght%5D.ttf' },
+          'Cormorant Garamond': { regular: 'https://raw.githubusercontent.com/google/fonts/main/ofl/cormorantgaramond/CormorantGaramond-Regular.ttf',
+                                  bold:    'https://raw.githubusercontent.com/google/fonts/main/ofl/cormorantgaramond/CormorantGaramond-Bold.ttf',
+                                  italic:  'https://raw.githubusercontent.com/google/fonts/main/ofl/cormorantgaramond/CormorantGaramond-Italic.ttf',
+                                  boldItalic: 'https://raw.githubusercontent.com/google/fonts/main/ofl/cormorantgaramond/CormorantGaramond-BoldItalic.ttf' },
+          'Dancing Script':     { regular: 'https://raw.githubusercontent.com/google/fonts/main/ofl/dancingscript/DancingScript%5Bwght%5D.ttf' },
+          'Cinzel':             { regular: 'https://raw.githubusercontent.com/google/fonts/main/ofl/cinzel/Cinzel%5Bwght%5D.ttf' },
+          'JetBrains Mono':     { regular: 'https://raw.githubusercontent.com/google/fonts/main/ofl/jetbrainsmono/JetBrainsMono%5Bwght%5D.ttf' },
         };
 
         let font;
+        const isBold   = !!field.bold;
+        const isItalic = !!field.italic;
+
         if (STANDARD_FONTS[field.fontFamily]) {
-          font = await pdfDoc.embedFont(STANDARD_FONTS[field.fontFamily]);
+          // Handle bold/italic for standard fonts
+          let stdKey = field.fontFamily;
+          if (isBold && stdKey === 'Helvetica')       stdKey = 'Helvetica Bold';
+          if (isBold && stdKey === 'Times New Roman') stdKey = 'Times Bold';
+          font = await pdfDoc.embedFont(STANDARD_FONTS[stdKey] || STANDARD_FONTS[field.fontFamily]);
+
         } else if (GOOGLE_FONT_URLS[field.fontFamily]) {
           try {
-            const fontResp = await axios.get(GOOGLE_FONT_URLS[field.fontFamily], { responseType: 'arraybuffer' });
-            font = await pdfDoc.embedFont(fontResp.data);
+            const entry = GOOGLE_FONT_URLS[field.fontFamily];
+            // Pick the best variant: boldItalic > bold/italic > regular
+            let url = entry.regular;
+            if (isBold && isItalic && entry.boldItalic) url = entry.boldItalic;
+            else if (isBold && entry.bold)              url = entry.bold;
+            else if (isItalic && entry.italic)          url = entry.italic;
+
+            const fontResp = await axios.get(url, { responseType: 'arraybuffer' });
+            font = await pdfDoc.embedFont(fontResp.data, { subset: true });
           } catch (e) {
-            console.warn(`Font load failed for ${field.fontFamily}, falling back to Helvetica`);
+            console.warn(`Font load failed for ${field.fontFamily}: ${e.message}, falling back to Helvetica`);
             font = await pdfDoc.embedFont(StandardFonts.Helvetica);
           }
         } else {
@@ -125,14 +145,33 @@ router.post('/generate', async (req, res) => {
         const x = (field.x / 100) * template.width;
         const y = template.height - (field.y / 100) * template.height - field.fontSize;
 
-        // Center alignment
-        if (field.align === 'center') {
-          const textWidth = font.widthOfTextAtSize(text, field.fontSize);
-          const fieldWidth = (field.width / 100) * template.width;
-          const centeredX  = x + (fieldWidth - textWidth) / 2;
-          page.drawText(text, { x: centeredX, y, size: field.fontSize, font, color: rgb(col.r, col.g, col.b) });
+        const letterSpacing = field.letterSpacing || 0;
+        const fieldWidth    = (field.width / 100) * template.width;
+
+        if (letterSpacing > 0) {
+          // pdf-lib has no native letter-spacing — draw char by char
+          const chars    = text.split('');
+          let totalWidth = chars.reduce((sum, ch) => sum + font.widthOfTextAtSize(ch, field.fontSize) + letterSpacing, -letterSpacing);
+          let startX     = x;
+          if (field.align === 'center') startX = x + (fieldWidth - totalWidth) / 2;
+          else if (field.align === 'right') startX = x + fieldWidth - totalWidth;
+
+          let cx = startX;
+          for (const ch of chars) {
+            page.drawText(ch, { x: cx, y, size: field.fontSize, font, color: rgb(col.r, col.g, col.b) });
+            cx += font.widthOfTextAtSize(ch, field.fontSize) + letterSpacing;
+          }
         } else {
-          page.drawText(text, { x, y, size: field.fontSize, font, color: rgb(col.r, col.g, col.b) });
+          // No letter-spacing — use normal drawText with alignment
+          let drawX = x;
+          if (field.align === 'center') {
+            const textWidth = font.widthOfTextAtSize(text, field.fontSize);
+            drawX = x + (fieldWidth - textWidth) / 2;
+          } else if (field.align === 'right') {
+            const textWidth = font.widthOfTextAtSize(text, field.fontSize);
+            drawX = x + fieldWidth - textWidth;
+          }
+          page.drawText(text, { x: drawX, y, size: field.fontSize, font, color: rgb(col.r, col.g, col.b) });
         }
       }
 
