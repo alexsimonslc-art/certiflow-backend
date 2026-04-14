@@ -4,6 +4,44 @@ const { google } = require('googleapis');
 const { PDFDocument, rgb, StandardFonts } = require('pdf-lib');
 const fontkit = require('@pdf-lib/fontkit');
 const axios = require('axios');
+// ── Font cache + dynamic Google Fonts fetcher ─────────────────────
+const fontCache = {};
+
+async function fetchGoogleFontBytes(family, bold, italic) {
+  const weight = bold ? 700 : 400;
+  const ital   = italic ? 1 : 0;
+  const cacheKey = `${family}-${weight}-${ital}`;
+
+  if (fontCache[cacheKey]) return fontCache[cacheKey];
+
+  // Step 1: Hit Google Fonts CSS API with an old User-Agent to get TTF URLs
+  const cssUrl = `https://fonts.googleapis.com/css2?family=${encodeURIComponent(family)}:ital,wght@${ital},${weight}&display=swap`;
+
+  const cssResp = await axios.get(cssUrl, {
+    headers: {
+      // Old Android UA → Google returns TTF format instead of woff2
+      'User-Agent': 'Mozilla/5.0 (Linux; U; Android 4.0) AppleWebKit/534.30 (KHTML, like Gecko) Version/4.0 Mobile Safari/534.30',
+    },
+    timeout: 10000,
+  });
+
+  // Step 2: Extract the font file URL from the CSS response
+  const match = cssResp.data.match(/src:\s*url\(([^)]+)\)\s*format\('truetype'\)/);
+  if (!match) {
+    // Fallback: try woff2 URL (won't work with pdf-lib but let's try)
+    const woff2Match = cssResp.data.match(/src:\s*url\(([^)]+)\)/);
+    if (!woff2Match) throw new Error(`No font URL found in CSS for ${family}`);
+    // If only woff2 available, try it — pdf-lib + fontkit might handle it
+    const fontResp = await axios.get(woff2Match[1], { responseType: 'arraybuffer', timeout: 15000 });
+    fontCache[cacheKey] = fontResp.data;
+    return fontResp.data;
+  }
+
+  // Step 3: Download the actual TTF file
+  const fontResp = await axios.get(match[1], { responseType: 'arraybuffer', timeout: 15000 });
+  fontCache[cacheKey] = fontResp.data;
+  return fontResp.data;
+}
 
 function hexToRgb(hex) {
   const r = parseInt(hex.slice(1, 3), 16) / 255;
@@ -100,89 +138,47 @@ router.post('/generate', async (req, res) => {
           'Courier New-BoldItalic': StandardFonts.CourierBoldOblique,
         };
 
-        // TTF URLs — pdf-lib CANNOT embed woff2, only ttf/otf
-        // Static TTF URLs — variable fonts [wght].ttf don't give pdf-lib real bold/italic
-        const GOOGLE_FONT_URLS = {
-          'Montserrat': {
-            regular:    'https://raw.githubusercontent.com/google/fonts/main/ofl/montserrat/static/Montserrat-Regular.ttf',
-            bold:       'https://raw.githubusercontent.com/google/fonts/main/ofl/montserrat/static/Montserrat-Bold.ttf',
-            italic:     'https://raw.githubusercontent.com/google/fonts/main/ofl/montserrat/static/Montserrat-Italic.ttf',
-            boldItalic: 'https://raw.githubusercontent.com/google/fonts/main/ofl/montserrat/static/Montserrat-BoldItalic.ttf',
-          },
-          'Raleway': {
-            regular:    'https://raw.githubusercontent.com/google/fonts/main/ofl/raleway/static/Raleway-Regular.ttf',
-            bold:       'https://raw.githubusercontent.com/google/fonts/main/ofl/raleway/static/Raleway-Bold.ttf',
-            italic:     'https://raw.githubusercontent.com/google/fonts/main/ofl/raleway/static/Raleway-Italic.ttf',
-            boldItalic: 'https://raw.githubusercontent.com/google/fonts/main/ofl/raleway/static/Raleway-BoldItalic.ttf',
-          },
-          'Plus Jakarta Sans': {
-            regular:    'https://raw.githubusercontent.com/google/fonts/main/ofl/plusjakartasans/static/PlusJakartaSans-Regular.ttf',
-            bold:       'https://raw.githubusercontent.com/google/fonts/main/ofl/plusjakartasans/static/PlusJakartaSans-Bold.ttf',
-            italic:     'https://raw.githubusercontent.com/google/fonts/main/ofl/plusjakartasans/static/PlusJakartaSans-Italic.ttf',
-            boldItalic: 'https://raw.githubusercontent.com/google/fonts/main/ofl/plusjakartasans/static/PlusJakartaSans-BoldItalic.ttf',
-          },
-          'EB Garamond': {
-            regular:    'https://raw.githubusercontent.com/google/fonts/main/ofl/ebgaramond/static/EBGaramond-Regular.ttf',
-            bold:       'https://raw.githubusercontent.com/google/fonts/main/ofl/ebgaramond/static/EBGaramond-Bold.ttf',
-            italic:     'https://raw.githubusercontent.com/google/fonts/main/ofl/ebgaramond/static/EBGaramond-Italic.ttf',
-            boldItalic: 'https://raw.githubusercontent.com/google/fonts/main/ofl/ebgaramond/static/EBGaramond-BoldItalic.ttf',
-          },
-          'Playfair Display': {
-            regular:    'https://raw.githubusercontent.com/google/fonts/main/ofl/playfairdisplay/static/PlayfairDisplay-Regular.ttf',
-            bold:       'https://raw.githubusercontent.com/google/fonts/main/ofl/playfairdisplay/static/PlayfairDisplay-Bold.ttf',
-            italic:     'https://raw.githubusercontent.com/google/fonts/main/ofl/playfairdisplay/static/PlayfairDisplay-Italic.ttf',
-            boldItalic: 'https://raw.githubusercontent.com/google/fonts/main/ofl/playfairdisplay/static/PlayfairDisplay-BoldItalic.ttf',
-          },
-          'Cormorant Garamond': {
-            regular:    'https://raw.githubusercontent.com/google/fonts/main/ofl/cormorantgaramond/CormorantGaramond-Regular.ttf',
-            bold:       'https://raw.githubusercontent.com/google/fonts/main/ofl/cormorantgaramond/CormorantGaramond-Bold.ttf',
-            italic:     'https://raw.githubusercontent.com/google/fonts/main/ofl/cormorantgaramond/CormorantGaramond-Italic.ttf',
-            boldItalic: 'https://raw.githubusercontent.com/google/fonts/main/ofl/cormorantgaramond/CormorantGaramond-BoldItalic.ttf',
-          },
-          'Dancing Script': {
-            regular:    'https://raw.githubusercontent.com/google/fonts/main/ofl/dancingscript/static/DancingScript-Regular.ttf',
-            bold:       'https://raw.githubusercontent.com/google/fonts/main/ofl/dancingscript/static/DancingScript-Bold.ttf',
-          },
-          'Cinzel': {
-            regular:    'https://raw.githubusercontent.com/google/fonts/main/ofl/cinzel/static/Cinzel-Regular.ttf',
-            bold:       'https://raw.githubusercontent.com/google/fonts/main/ofl/cinzel/static/Cinzel-Bold.ttf',
-          },
-          'JetBrains Mono': {
-            regular:    'https://raw.githubusercontent.com/google/fonts/main/ofl/jetbrainsmono/static/JetBrainsMono-Regular.ttf',
-            bold:       'https://raw.githubusercontent.com/google/fonts/main/ofl/jetbrainsmono/static/JetBrainsMono-Bold.ttf',
-            italic:     'https://raw.githubusercontent.com/google/fonts/main/ofl/jetbrainsmono/static/JetBrainsMono-Italic.ttf',
-            boldItalic: 'https://raw.githubusercontent.com/google/fonts/main/ofl/jetbrainsmono/static/JetBrainsMono-BoldItalic.ttf',
-          },
-        };
+        // Google Fonts that we support (just the family names — fetched dynamically)
+        const GOOGLE_FONTS = [
+          'Montserrat', 'Raleway', 'Plus Jakarta Sans', 'EB Garamond',
+          'Playfair Display', 'Cormorant Garamond', 'Dancing Script',
+          'Cinzel', 'JetBrains Mono',
+        ];
 
         let font;
         const isBold   = !!field.bold;
         const isItalic = !!field.italic;
+        const variantSuffix = (isBold && isItalic) ? '-BoldItalic'
+                            : isBold               ? '-Bold'
+                            : isItalic              ? '-Italic'
+                            : '';
 
-        // Build variant suffix for standard font lookup
-        const variantSuffix = (isBold && isItalic) ? '-BoldItalic' : isBold ? '-Bold' : isItalic ? '-Italic' : '';
-
-        if (STANDARD_FONTS[field.fontFamily]) {
+        if (STANDARD_FONTS[field.fontFamily] || STANDARD_FONTS[field.fontFamily + variantSuffix]) {
+          // Standard PDF font — pick the right bold/italic variant
           const stdKey = field.fontFamily + variantSuffix;
           font = await pdfDoc.embedFont(STANDARD_FONTS[stdKey] || STANDARD_FONTS[field.fontFamily]);
 
-        } else if (GOOGLE_FONT_URLS[field.fontFamily]) {
+        } else if (GOOGLE_FONTS.includes(field.fontFamily)) {
+          // Google Font — fetch TTF dynamically via CSS API
           try {
-            const entry = GOOGLE_FONT_URLS[field.fontFamily];
-            // Pick the best variant: boldItalic > bold/italic > regular
-            let url = entry.regular;
-            if (isBold && isItalic && entry.boldItalic) url = entry.boldItalic;
-            else if (isBold && entry.bold)              url = entry.bold;
-            else if (isItalic && entry.italic)          url = entry.italic;
-
-            const fontResp = await axios.get(url, { responseType: 'arraybuffer' });
-            font = await pdfDoc.embedFont(fontResp.data, { subset: true });
+            const fontBytes = await fetchGoogleFontBytes(field.fontFamily, isBold, isItalic);
+            font = await pdfDoc.embedFont(fontBytes, { subset: true });
           } catch (e) {
-            console.warn(`Font load failed for ${field.fontFamily}: ${e.message}, falling back to Helvetica`);
-            font = await pdfDoc.embedFont(StandardFonts.Helvetica);
+            console.warn(`Google Font failed for ${field.fontFamily} (bold:${isBold}, italic:${isItalic}): ${e.message}`);
+            // Fallback: try without bold/italic
+            try {
+              const fallbackBytes = await fetchGoogleFontBytes(field.fontFamily, false, false);
+              font = await pdfDoc.embedFont(fallbackBytes, { subset: true });
+            } catch (e2) {
+              console.warn(`Google Font fallback also failed, using Helvetica: ${e2.message}`);
+              const fallbackKey = 'Helvetica' + variantSuffix;
+              font = await pdfDoc.embedFont(STANDARD_FONTS[fallbackKey] || StandardFonts.Helvetica);
+            }
           }
         } else {
-          font = await pdfDoc.embedFont(StandardFonts.Helvetica);
+          // Unknown font — use Helvetica with correct bold/italic
+          const fallbackKey = 'Helvetica' + variantSuffix;
+          font = await pdfDoc.embedFont(STANDARD_FONTS[fallbackKey] || StandardFonts.Helvetica);
         }
         const col  = hexToRgb(field.color || '#000000');
 
