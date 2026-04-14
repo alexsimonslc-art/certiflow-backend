@@ -86,39 +86,84 @@ router.post('/generate', async (req, res) => {
         }
 
         const STANDARD_FONTS = {
-          'Helvetica':      StandardFonts.Helvetica,
-          'Times New Roman':StandardFonts.TimesRoman,
-          'Courier New':    StandardFonts.Courier,
-          'Helvetica Bold': StandardFonts.HelveticaBold,
-          'Times Bold':     StandardFonts.TimesRomanBold,
+          'Helvetica':              StandardFonts.Helvetica,
+          'Helvetica-Bold':         StandardFonts.HelveticaBold,
+          'Helvetica-Italic':       StandardFonts.HelveticaOblique,
+          'Helvetica-BoldItalic':   StandardFonts.HelveticaBoldOblique,
+          'Times New Roman':        StandardFonts.TimesRoman,
+          'Times New Roman-Bold':   StandardFonts.TimesRomanBold,
+          'Times New Roman-Italic': StandardFonts.TimesRomanItalic,
+          'Times New Roman-BoldItalic': StandardFonts.TimesRomanBoldItalic,
+          'Courier New':            StandardFonts.Courier,
+          'Courier New-Bold':       StandardFonts.CourierBold,
+          'Courier New-Italic':     StandardFonts.CourierOblique,
+          'Courier New-BoldItalic': StandardFonts.CourierBoldOblique,
         };
 
         // TTF URLs — pdf-lib CANNOT embed woff2, only ttf/otf
+        // Static TTF URLs — variable fonts [wght].ttf don't give pdf-lib real bold/italic
         const GOOGLE_FONT_URLS = {
-          'Montserrat':         { regular: 'https://raw.githubusercontent.com/google/fonts/main/ofl/montserrat/Montserrat%5Bwght%5D.ttf' },
-          'Montserrat-Bold':    { regular: 'https://raw.githubusercontent.com/google/fonts/main/ofl/montserrat/Montserrat%5Bwght%5D.ttf' },
-          'Raleway':            { regular: 'https://raw.githubusercontent.com/google/fonts/main/ofl/raleway/Raleway%5Bwght%5D.ttf' },
-          'Plus Jakarta Sans':  { regular: 'https://raw.githubusercontent.com/google/fonts/main/ofl/plusjakartasans/PlusJakartaSans%5Bwght%5D.ttf' },
-          'EB Garamond':        { regular: 'https://raw.githubusercontent.com/google/fonts/main/ofl/ebgaramond/EBGaramond%5Bwght%5D.ttf' },
-          'Playfair Display':   { regular: 'https://raw.githubusercontent.com/google/fonts/main/ofl/playfairdisplay/PlayfairDisplay%5Bwght%5D.ttf' },
-          'Cormorant Garamond': { regular: 'https://raw.githubusercontent.com/google/fonts/main/ofl/cormorantgaramond/CormorantGaramond-Regular.ttf',
-                                  bold:    'https://raw.githubusercontent.com/google/fonts/main/ofl/cormorantgaramond/CormorantGaramond-Bold.ttf',
-                                  italic:  'https://raw.githubusercontent.com/google/fonts/main/ofl/cormorantgaramond/CormorantGaramond-Italic.ttf',
-                                  boldItalic: 'https://raw.githubusercontent.com/google/fonts/main/ofl/cormorantgaramond/CormorantGaramond-BoldItalic.ttf' },
-          'Dancing Script':     { regular: 'https://raw.githubusercontent.com/google/fonts/main/ofl/dancingscript/DancingScript%5Bwght%5D.ttf' },
-          'Cinzel':             { regular: 'https://raw.githubusercontent.com/google/fonts/main/ofl/cinzel/Cinzel%5Bwght%5D.ttf' },
-          'JetBrains Mono':     { regular: 'https://raw.githubusercontent.com/google/fonts/main/ofl/jetbrainsmono/JetBrainsMono%5Bwght%5D.ttf' },
+          'Montserrat': {
+            regular:    'https://raw.githubusercontent.com/google/fonts/main/ofl/montserrat/static/Montserrat-Regular.ttf',
+            bold:       'https://raw.githubusercontent.com/google/fonts/main/ofl/montserrat/static/Montserrat-Bold.ttf',
+            italic:     'https://raw.githubusercontent.com/google/fonts/main/ofl/montserrat/static/Montserrat-Italic.ttf',
+            boldItalic: 'https://raw.githubusercontent.com/google/fonts/main/ofl/montserrat/static/Montserrat-BoldItalic.ttf',
+          },
+          'Raleway': {
+            regular:    'https://raw.githubusercontent.com/google/fonts/main/ofl/raleway/static/Raleway-Regular.ttf',
+            bold:       'https://raw.githubusercontent.com/google/fonts/main/ofl/raleway/static/Raleway-Bold.ttf',
+            italic:     'https://raw.githubusercontent.com/google/fonts/main/ofl/raleway/static/Raleway-Italic.ttf',
+            boldItalic: 'https://raw.githubusercontent.com/google/fonts/main/ofl/raleway/static/Raleway-BoldItalic.ttf',
+          },
+          'Plus Jakarta Sans': {
+            regular:    'https://raw.githubusercontent.com/google/fonts/main/ofl/plusjakartasans/static/PlusJakartaSans-Regular.ttf',
+            bold:       'https://raw.githubusercontent.com/google/fonts/main/ofl/plusjakartasans/static/PlusJakartaSans-Bold.ttf',
+            italic:     'https://raw.githubusercontent.com/google/fonts/main/ofl/plusjakartasans/static/PlusJakartaSans-Italic.ttf',
+            boldItalic: 'https://raw.githubusercontent.com/google/fonts/main/ofl/plusjakartasans/static/PlusJakartaSans-BoldItalic.ttf',
+          },
+          'EB Garamond': {
+            regular:    'https://raw.githubusercontent.com/google/fonts/main/ofl/ebgaramond/static/EBGaramond-Regular.ttf',
+            bold:       'https://raw.githubusercontent.com/google/fonts/main/ofl/ebgaramond/static/EBGaramond-Bold.ttf',
+            italic:     'https://raw.githubusercontent.com/google/fonts/main/ofl/ebgaramond/static/EBGaramond-Italic.ttf',
+            boldItalic: 'https://raw.githubusercontent.com/google/fonts/main/ofl/ebgaramond/static/EBGaramond-BoldItalic.ttf',
+          },
+          'Playfair Display': {
+            regular:    'https://raw.githubusercontent.com/google/fonts/main/ofl/playfairdisplay/static/PlayfairDisplay-Regular.ttf',
+            bold:       'https://raw.githubusercontent.com/google/fonts/main/ofl/playfairdisplay/static/PlayfairDisplay-Bold.ttf',
+            italic:     'https://raw.githubusercontent.com/google/fonts/main/ofl/playfairdisplay/static/PlayfairDisplay-Italic.ttf',
+            boldItalic: 'https://raw.githubusercontent.com/google/fonts/main/ofl/playfairdisplay/static/PlayfairDisplay-BoldItalic.ttf',
+          },
+          'Cormorant Garamond': {
+            regular:    'https://raw.githubusercontent.com/google/fonts/main/ofl/cormorantgaramond/CormorantGaramond-Regular.ttf',
+            bold:       'https://raw.githubusercontent.com/google/fonts/main/ofl/cormorantgaramond/CormorantGaramond-Bold.ttf',
+            italic:     'https://raw.githubusercontent.com/google/fonts/main/ofl/cormorantgaramond/CormorantGaramond-Italic.ttf',
+            boldItalic: 'https://raw.githubusercontent.com/google/fonts/main/ofl/cormorantgaramond/CormorantGaramond-BoldItalic.ttf',
+          },
+          'Dancing Script': {
+            regular:    'https://raw.githubusercontent.com/google/fonts/main/ofl/dancingscript/static/DancingScript-Regular.ttf',
+            bold:       'https://raw.githubusercontent.com/google/fonts/main/ofl/dancingscript/static/DancingScript-Bold.ttf',
+          },
+          'Cinzel': {
+            regular:    'https://raw.githubusercontent.com/google/fonts/main/ofl/cinzel/static/Cinzel-Regular.ttf',
+            bold:       'https://raw.githubusercontent.com/google/fonts/main/ofl/cinzel/static/Cinzel-Bold.ttf',
+          },
+          'JetBrains Mono': {
+            regular:    'https://raw.githubusercontent.com/google/fonts/main/ofl/jetbrainsmono/static/JetBrainsMono-Regular.ttf',
+            bold:       'https://raw.githubusercontent.com/google/fonts/main/ofl/jetbrainsmono/static/JetBrainsMono-Bold.ttf',
+            italic:     'https://raw.githubusercontent.com/google/fonts/main/ofl/jetbrainsmono/static/JetBrainsMono-Italic.ttf',
+            boldItalic: 'https://raw.githubusercontent.com/google/fonts/main/ofl/jetbrainsmono/static/JetBrainsMono-BoldItalic.ttf',
+          },
         };
 
         let font;
         const isBold   = !!field.bold;
         const isItalic = !!field.italic;
 
+        // Build variant suffix for standard font lookup
+        const variantSuffix = (isBold && isItalic) ? '-BoldItalic' : isBold ? '-Bold' : isItalic ? '-Italic' : '';
+
         if (STANDARD_FONTS[field.fontFamily]) {
-          // Handle bold/italic for standard fonts
-          let stdKey = field.fontFamily;
-          if (isBold && stdKey === 'Helvetica')       stdKey = 'Helvetica Bold';
-          if (isBold && stdKey === 'Times New Roman') stdKey = 'Times Bold';
+          const stdKey = field.fontFamily + variantSuffix;
           font = await pdfDoc.embedFont(STANDARD_FONTS[stdKey] || STANDARD_FONTS[field.fontFamily]);
 
         } else if (GOOGLE_FONT_URLS[field.fontFamily]) {
