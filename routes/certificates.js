@@ -85,14 +85,40 @@ router.post('/generate', async (req, res) => {
           text = row[field.column];
         }
 
-        const fontMap = {
-          'Helvetica': StandardFonts.Helvetica,
-          'Times New Roman': StandardFonts.TimesRoman,
-          'Courier': StandardFonts.Courier,
+        const STANDARD_FONTS = {
+          'Helvetica':      StandardFonts.Helvetica,
+          'Times New Roman':StandardFonts.TimesRoman,
+          'Courier New':    StandardFonts.Courier,
           'Helvetica Bold': StandardFonts.HelveticaBold,
-          'Times Bold': StandardFonts.TimesRomanBold,
+          'Times Bold':     StandardFonts.TimesRomanBold,
         };
-        const font = await pdfDoc.embedFont(fontMap[field.fontFamily] || StandardFonts.Helvetica);
+
+        const GOOGLE_FONT_URLS = {
+          'Montserrat':         'https://fonts.gstatic.com/s/montserrat/v26/JTUSjIg1_i6t8kCHKm459Wlhyw.woff2',
+          'Raleway':            'https://fonts.gstatic.com/s/raleway/v28/1Ptxg8zYS_SKggPN4iEgvnHyvveLxVvaorCIPrE.woff2',
+          'Plus Jakarta Sans':  'https://fonts.gstatic.com/s/plusjakartasans/v8/LDIoaomQNQcsA88c7O9yZ4KMCoOg4Ko20yygg7c.woff2',
+          'EB Garamond':        'https://fonts.gstatic.com/s/ebgaramond/v26/SlGDmQSNjdsmc35JDF1K5E55YMjF_7DPuGi-6_RUA4V-e6yHgQ.woff2',
+          'Playfair Display':   'https://fonts.gstatic.com/s/playfairdisplay/v36/nuFvD-vYSZviVYUb_rj3ij__anPXJzDwcbmjWBN2PKdFvUDQ.woff2',
+          'Cormorant Garamond': 'https://fonts.gstatic.com/s/cormorantgaramond/v16/co3WmX5slCNuHLi8bLeY9MK7whWMhyjYqXtK.woff2',
+          'Dancing Script':     'https://fonts.gstatic.com/s/dancingscript/v25/If2cXTr6YS-zF4S-kcSWSVi_sxjsohD9F50Ruu7BMSo3Sup5.woff2',
+          'Cinzel':             'https://fonts.gstatic.com/s/cinzel/v23/8vIU7ww63mVu7gt79mT7.woff2',
+          'JetBrains Mono':     'https://fonts.gstatic.com/s/jetbrainsmono/v18/tDbY2o-flEEny0FZhsfKu5WU4zr3E_BX0PnT8RD8yKxTOlOV.woff2',
+        };
+
+        let font;
+        if (STANDARD_FONTS[field.fontFamily]) {
+          font = await pdfDoc.embedFont(STANDARD_FONTS[field.fontFamily]);
+        } else if (GOOGLE_FONT_URLS[field.fontFamily]) {
+          try {
+            const fontResp = await axios.get(GOOGLE_FONT_URLS[field.fontFamily], { responseType: 'arraybuffer' });
+            font = await pdfDoc.embedFont(fontResp.data);
+          } catch (e) {
+            console.warn(`Font load failed for ${field.fontFamily}, falling back to Helvetica`);
+            font = await pdfDoc.embedFont(StandardFonts.Helvetica);
+          }
+        } else {
+          font = await pdfDoc.embedFont(StandardFonts.Helvetica);
+        }
         const col  = hexToRgb(field.color || '#000000');
 
         // Convert % positions to absolute (PDF y is from bottom)
