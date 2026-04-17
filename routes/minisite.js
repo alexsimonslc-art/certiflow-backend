@@ -435,7 +435,55 @@ router.get('/config/:slug', async (req, res) => {
 });
 
 /* ═══════════════════════════════════════════════════════════════
-   ROUTE 5 — POST /api/minisite/save (AUTH REQUIRED)
+   ROUTE 5a — POST /api/minisite/publish (AUTH REQUIRED)
+   Dedicated publish endpoint — always sets status='published'.
+   Separate from /save so the client can distinguish draft vs live.
+═══════════════════════════════════════════════════════════════ */
+router.post('/publish', async (req, res) => {
+  try {
+    const user = getUserFromToken(req);
+    const { siteId, slug, name, registrationOpen, config } = req.body;
+
+    if (!siteId || !slug) return res.status(400).json({ error: 'siteId and slug required' });
+    if (slug.length < 3) return res.status(400).json({ error: 'Slug must be at least 3 characters' });
+
+    // Slug uniqueness (excluding this site)
+    const { data: existing } = await supabase
+      .from('mini_sites')
+      .select('id')
+      .eq('slug', slug)
+      .neq('id', siteId)
+      .single();
+
+    if (existing) return res.status(409).json({ error: 'Slug already taken. Choose another in Site Settings.' });
+
+    // Upsert with status = 'published'
+    const { error } = await supabase
+      .from('mini_sites')
+      .upsert({
+        id: siteId,
+        user_id: user.googleId,
+        name: name || 'Untitled',
+        slug,
+        status: 'published',
+        registration_open: registrationOpen !== false,
+        config: config || {},
+        updated_at: new Date().toISOString(),
+      }, { onConflict: 'id' });
+
+    if (error) throw new Error(error.message);
+
+    const publicUrl = `/site.html?slug=${slug}`;
+
+    return res.json({ success: true, slug, publicUrl });
+  } catch (err) {
+    console.error('[minisite/publish]', err.message);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+/* ═══════════════════════════════════════════════════════════════
+   ROUTE 5b — POST /api/minisite/save (AUTH REQUIRED)
    Save or update a mini site config to Supabase.
 ═══════════════════════════════════════════════════════════════ */
 router.post('/save', async (req, res) => {
