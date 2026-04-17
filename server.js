@@ -51,6 +51,12 @@ app.use('/api/quota', verifyToken, quotaRoutes);
 app.use('/api/minisite', minisiteRoutes);
 app.get('/health', (req, res) => res.json({ status: 'ok' }));
 
+// Public mini site renderer — serves site.html for any /s/SLUG path
+const path = require('path');
+app.get('/s/:slug', (req, res) => {
+  res.sendFile(path.join(__dirname, '../frontend/site.html'));
+});
+
 app.listen(process.env.PORT || 3000, () =>
   console.log(`Honourix backend running on port ${process.env.PORT}`)
 );
