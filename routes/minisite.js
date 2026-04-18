@@ -340,7 +340,8 @@ router.post('/submit', async (req, res) => {
 
   } catch (err) {
     console.error('[minisite/submit]', err.message);
-    return res.status(500).json({ error: 'Submission failed. Please try again.' });
+    // Return real error message so client-side toast shows the actual problem
+    return res.status(500).json({ error: err.message || 'Submission failed. Please try again.' });
   }
 });
 
