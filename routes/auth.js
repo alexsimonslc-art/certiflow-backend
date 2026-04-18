@@ -4,11 +4,11 @@ const jwt = require('jsonwebtoken');
 require('dotenv').config();
 
 const { createClient } = require('@supabase/supabase-js');
-    const supabase = createClient(
-      process.env.SUPABASE_URL,
-      process.env.SUPABASE_KEY
-    );
-    
+const supabase = createClient(
+  process.env.SUPABASE_URL,
+  process.env.SUPABASE_KEY
+);
+
 const router = express.Router();
 
 const oauth2Client = new google.auth.OAuth2(
@@ -20,7 +20,7 @@ const oauth2Client = new google.auth.OAuth2(
 const SCOPES = [
   'https://www.googleapis.com/auth/gmail.send',
   'https://www.googleapis.com/auth/drive',
-  'https://www.googleapis.com/auth/gmail.readonly', 
+  'https://www.googleapis.com/auth/gmail.readonly',
   'https://www.googleapis.com/auth/spreadsheets',
   'https://www.googleapis.com/auth/drive.metadata.readonly',
   'https://www.googleapis.com/auth/presentations.readonly',
@@ -49,14 +49,14 @@ router.get('/google/callback', async (req, res) => {
     const { data: profile } = await oauth2.userinfo.get();
 
     // Save/update user in Supabase
-    
+
 
     // Fetch existing refresh_token from DB first
     const { data: existing } = await supabase
       .from('users')
       .select('refresh_token')
       .eq('google_id', profile.id)
-      .single();
+      .maybeSingle();   // returns null instead of error when no row found
 
     const refreshToken = tokens.refresh_token || existing?.refresh_token || null;
 
@@ -89,7 +89,7 @@ router.get('/google/callback', async (req, res) => {
         picture: profile.picture,
         accountType,
         accessToken: tokens.access_token,
-        refreshToken: refreshToken, 
+        refreshToken: refreshToken,
       },
       process.env.JWT_SECRET,
       { expiresIn: '7d' }
