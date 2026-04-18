@@ -300,6 +300,18 @@ router.post('/submit', async (req, res) => {
     }
 
     // ── Build OAuth client with organizer's tokens
+    // Debug: log what we actually have (remove after confirming fix works)
+    console.log('[minisite/submit] organizer tokens —',
+      'access_token:', organizer.access_token ? 'present' : 'NULL',
+      'refresh_token:', organizer.refresh_token ? 'present' : 'NULL'
+    );
+
+    if (!organizer.refresh_token) {
+      return res.status(503).json({
+        error: 'The organiser\'s Google account needs to be reconnected. Please ask the organiser to log out of Honourix and log back in.'
+      });
+    }
+
     const oauth2 = new google.auth.OAuth2(
       process.env.GOOGLE_CLIENT_ID,
       process.env.GOOGLE_CLIENT_SECRET,
