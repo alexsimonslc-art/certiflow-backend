@@ -77,22 +77,29 @@ async function getOAuthClient(user) {
    (Replace with Redis in production)
 ───────────────────────────────────────────────────────────── */
 const _submitCounts = new Map();
-const SUBMIT_LIMIT = 5;   // max submissions per IP per window
-const SUBMIT_WINDOW = 60 * 60 * 1000; // 1 hour
+const SUBMIT_LIMIT = 15;                // per IP+site combination
+const SUBMIT_WINDOW = 15 * 60 * 1000;   // 15-minute rolling window
 
-function checkRateLimit(ip) {
+function checkRateLimit(ip, siteKey) {
+  // Key is IP + siteId/slug so testing multiple sites doesn't cross-contaminate
+  const key = `${ip}::${siteKey || 'unknown'}`;
   const now = Date.now();
-  const entry = _submitCounts.get(ip) || { count: 0, resetAt: now + SUBMIT_WINDOW };
+  const entry = _submitCounts.get(key) || { count: 0, resetAt: now + SUBMIT_WINDOW };
   if (now > entry.resetAt) {
-    _submitCounts.set(ip, { count: 1, resetAt: now + SUBMIT_WINDOW });
+    _submitCounts.set(key, { count: 1, resetAt: now + SUBMIT_WINDOW });
     return false;
   }
   if (entry.count >= SUBMIT_LIMIT) return true;
   entry.count++;
-  _submitCounts.set(ip, entry);
+  _submitCounts.set(key, entry);
+  // Prune old entries every 500 calls to prevent memory leak
+  if (_submitCounts.size > 500) {
+    for (const [k, v] of _submitCounts) {
+      if (now > v.resetAt) _submitCounts.delete(k);
+    }
+  }
   return false;
 }
-
 /* ─────────────────────────────────────────────────────────────
    SHEET HELPERS
 ───────────────────────────────────────────────────────────── */
@@ -239,7 +246,8 @@ router.post('/submit', async (req, res) => {
 
     // ── Rate limit by IP
     const ip = req.headers['x-forwarded-for']?.split(',')[0] || req.ip || 'unknown';
-    if (checkRateLimit(ip)) {
+    const siteKey = siteId || slug || 'unknown';
+    if (checkRateLimit(ip, siteKey)) {
       return res.status(429).json({ error: 'Too many submissions. Please try again later.' });
     }
 
