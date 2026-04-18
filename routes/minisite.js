@@ -292,7 +292,7 @@ router.post('/submit', async (req, res) => {
     const { data: organizer } = await supabase
       .from('users')
       .select('access_token, refresh_token, google_id')
-      .eq('id', siteRecord.user_id)
+      .eq('google_id', siteRecord.user_id)
       .single();
 
     if (!organizer) {
