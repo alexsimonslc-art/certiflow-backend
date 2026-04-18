@@ -12,9 +12,9 @@
    DELETE /api/minisite/:id           — Delete a site (auth)
 ================================================================ */
 
-const express = require('express');
+const express   = require('express');
 const { google } = require('googleapis');
-const jwt = require('jsonwebtoken');
+const jwt        = require('jsonwebtoken');
 require('dotenv').config();
 
 const { createClient } = require('@supabase/supabase-js');
@@ -55,7 +55,7 @@ async function getOAuthClient(user) {
   if (error || !dbUser) throw new Error('User not found in database');
 
   oauth2.setCredentials({
-    access_token: dbUser.access_token,
+    access_token:  dbUser.access_token,
     refresh_token: dbUser.refresh_token,
   });
 
@@ -77,11 +77,11 @@ async function getOAuthClient(user) {
    (Replace with Redis in production)
 ───────────────────────────────────────────────────────────── */
 const _submitCounts = new Map();
-const SUBMIT_LIMIT = 5;   // max submissions per IP per window
+const SUBMIT_LIMIT  = 5;   // max submissions per IP per window
 const SUBMIT_WINDOW = 60 * 60 * 1000; // 1 hour
 
 function checkRateLimit(ip) {
-  const now = Date.now();
+  const now   = Date.now();
   const entry = _submitCounts.get(ip) || { count: 0, resetAt: now + SUBMIT_WINDOW };
   if (now > entry.resetAt) {
     _submitCounts.set(ip, { count: 1, resetAt: now + SUBMIT_WINDOW });
@@ -114,7 +114,7 @@ async function appendRowToSheet(auth, sheetId, data) {
   });
 
   const existingHeaders = (meta.data.values?.[0] || []).map(h => h.toString().trim());
-  const dataKeys = Object.keys(data);
+  const dataKeys        = Object.keys(data);
 
   let headerRow;
 
@@ -168,7 +168,7 @@ async function appendRowToSheet(auth, sheetId, data) {
 
   return {
     updatedRange: appendRes.data.updates?.updatedRange,
-    rowsAdded: appendRes.data.updates?.updatedRows || 1,
+    rowsAdded:    appendRes.data.updates?.updatedRows || 1,
   };
 }
 
@@ -187,7 +187,7 @@ async function createSheetForSite(auth, siteName) {
       sheets: [
         {
           properties: {
-            title: 'Sheet1',
+            title:     'Sheet1',
             gridProperties: { frozenRowCount: 1 },
           },
         },
@@ -298,7 +298,7 @@ router.post('/submit', async (req, res) => {
       process.env.GOOGLE_REDIRECT_URI
     );
     oauth2.setCredentials({
-      access_token: organizer.access_token,
+      access_token:  organizer.access_token,
       refresh_token: organizer.refresh_token,
     });
     // Persist any token refresh
@@ -325,8 +325,8 @@ router.post('/submit', async (req, res) => {
       .eq('id', siteRecord.id);
 
     return res.json({
-      ok: true,
-      rowsAdded: result.rowsAdded,
+      ok:           true,
+      rowsAdded:    result.rowsAdded,
       updatedRange: result.updatedRange,
     });
 
@@ -342,7 +342,7 @@ router.post('/submit', async (req, res) => {
 ═══════════════════════════════════════════════════════════════ */
 router.post('/sheet/create', async (req, res) => {
   try {
-    const user = getUserFromToken(req);
+    const user     = getUserFromToken(req);
     const { siteId, siteName } = req.body;
     if (!siteId) return res.status(400).json({ error: 'siteId required' });
 
@@ -357,7 +357,7 @@ router.post('/sheet/create', async (req, res) => {
     if (!site) return res.status(404).json({ error: 'Site not found' });
     if (site.sheet_id) return res.json({ sheetId: site.sheet_id, alreadyExists: true });
 
-    const auth = await getOAuthClient(user);
+    const auth    = await getOAuthClient(user);
     const sheetId = await createSheetForSite(auth, siteName || site.name);
 
     // Persist sheet ID to Supabase
@@ -379,10 +379,10 @@ router.post('/sheet/create', async (req, res) => {
 ═══════════════════════════════════════════════════════════════ */
 router.get('/sheet/:sheetId', async (req, res) => {
   try {
-    const user = getUserFromToken(req);
+    const user    = getUserFromToken(req);
     const { sheetId } = req.params;
-    const auth = await getOAuthClient(user);
-    const sheets = google.sheets({ version: 'v4', auth });
+    const auth    = await getOAuthClient(user);
+    const sheets  = google.sheets({ version: 'v4', auth });
 
     const meta = await sheets.spreadsheets.get({
       spreadsheetId: sheetId,
@@ -390,9 +390,9 @@ router.get('/sheet/:sheetId', async (req, res) => {
     });
 
     const firstSheet = meta.data.sheets?.[0];
-    const rowCount = (firstSheet?.properties?.gridProperties?.rowCount || 1) - 1;
-    const title = meta.data.properties?.title || '';
-    const sheetUrl = `https://docs.google.com/spreadsheets/d/${sheetId}/edit`;
+    const rowCount   = (firstSheet?.properties?.gridProperties?.rowCount || 1) - 1;
+    const title      = meta.data.properties?.title || '';
+    const sheetUrl   = `https://docs.google.com/spreadsheets/d/${sheetId}/edit`;
 
     return res.json({ ok: true, title, rowCount: Math.max(0, rowCount), sheetUrl });
   } catch (err) {
@@ -421,12 +421,12 @@ router.get('/config/:slug', async (req, res) => {
     }
 
     return res.json({
-      id: site.id,
-      name: site.name,
-      slug: site.slug,
+      id:               site.id,
+      name:             site.name,
+      slug:             site.slug,
       registrationOpen: site.registration_open !== false,
-      submissionCount: site.submission_count || 0,
-      config: site.config || {},
+      submissionCount:  site.submission_count  || 0,
+      config:           site.config || {},
     });
   } catch (err) {
     console.error('[minisite/config/:slug]', err.message);
@@ -445,7 +445,7 @@ router.post('/publish', async (req, res) => {
     const { siteId, slug, name, registrationOpen, config } = req.body;
 
     if (!siteId || !slug) return res.status(400).json({ error: 'siteId and slug required' });
-    if (slug.length < 3) return res.status(400).json({ error: 'Slug must be at least 3 characters' });
+    if (slug.length < 3)   return res.status(400).json({ error: 'Slug must be at least 3 characters' });
 
     // Slug uniqueness (excluding this site)
     const { data: existing } = await supabase
@@ -461,14 +461,14 @@ router.post('/publish', async (req, res) => {
     const { error } = await supabase
       .from('mini_sites')
       .upsert({
-        id: siteId,
-        user_id: user.googleId,
-        name: name || 'Untitled',
+        id:               siteId,
+        user_id:          user.googleId,
+        name:             name || 'Untitled',
         slug,
-        status: 'published',
+        status:           'published',
         registration_open: registrationOpen !== false,
-        config: config || {},
-        updated_at: new Date().toISOString(),
+        config:           config || {},
+        updated_at:       new Date().toISOString(),
       }, { onConflict: 'id' });
 
     if (error) throw new Error(error.message);
@@ -508,13 +508,13 @@ router.post('/save', async (req, res) => {
       .from('mini_sites')
       .upsert({
         id,
-        user_id: user.googleId,
-        name: name || 'Untitled',
+        user_id:           user.googleId,
+        name:              name || 'Untitled',
         slug,
-        status: status || 'draft',
+        status:            status || 'draft',
         registration_open: config?.registrationOpen !== false,
-        config: config || {},
-        updated_at: new Date().toISOString(),
+        config:            config || {},
+        updated_at:        new Date().toISOString(),
       }, { onConflict: 'id' });
 
     if (error) throw new Error(error.message);
