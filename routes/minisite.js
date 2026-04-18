@@ -12,9 +12,9 @@
    DELETE /api/minisite/:id           — Delete a site (auth)
 ================================================================ */
 
-const express = require('express');
+const express   = require('express');
 const { google } = require('googleapis');
-const jwt = require('jsonwebtoken');
+const jwt        = require('jsonwebtoken');
 require('dotenv').config();
 
 const { createClient } = require('@supabase/supabase-js');
@@ -55,7 +55,7 @@ async function getOAuthClient(user) {
   if (error || !dbUser) throw new Error('User not found in database');
 
   oauth2.setCredentials({
-    access_token: dbUser.access_token,
+    access_token:  dbUser.access_token,
     refresh_token: dbUser.refresh_token,
   });
 
@@ -77,29 +77,22 @@ async function getOAuthClient(user) {
    (Replace with Redis in production)
 ───────────────────────────────────────────────────────────── */
 const _submitCounts = new Map();
-const SUBMIT_LIMIT = 15;                // per IP+site combination
-const SUBMIT_WINDOW = 15 * 60 * 1000;   // 15-minute rolling window
+const SUBMIT_LIMIT  = 5;   // max submissions per IP per window
+const SUBMIT_WINDOW = 60 * 60 * 1000; // 1 hour
 
-function checkRateLimit(ip, siteKey) {
-  // Key is IP + siteId/slug so testing multiple sites doesn't cross-contaminate
-  const key = `${ip}::${siteKey || 'unknown'}`;
-  const now = Date.now();
-  const entry = _submitCounts.get(key) || { count: 0, resetAt: now + SUBMIT_WINDOW };
+function checkRateLimit(ip) {
+  const now   = Date.now();
+  const entry = _submitCounts.get(ip) || { count: 0, resetAt: now + SUBMIT_WINDOW };
   if (now > entry.resetAt) {
-    _submitCounts.set(key, { count: 1, resetAt: now + SUBMIT_WINDOW });
+    _submitCounts.set(ip, { count: 1, resetAt: now + SUBMIT_WINDOW });
     return false;
   }
   if (entry.count >= SUBMIT_LIMIT) return true;
   entry.count++;
-  _submitCounts.set(key, entry);
-  // Prune old entries every 500 calls to prevent memory leak
-  if (_submitCounts.size > 500) {
-    for (const [k, v] of _submitCounts) {
-      if (now > v.resetAt) _submitCounts.delete(k);
-    }
-  }
+  _submitCounts.set(ip, entry);
   return false;
 }
+
 /* ─────────────────────────────────────────────────────────────
    SHEET HELPERS
 ───────────────────────────────────────────────────────────── */
@@ -111,46 +104,113 @@ function checkRateLimit(ip, siteKey) {
  * sheetId: Google Sheet file ID
  * data:    { fieldName: value, ... }
  */
-async function appendRowToSheet(auth, sheetId, data) {
+async function appendRowToSheet(auth, sheetId, data, files) {
   const sheets = google.sheets({ version: 'v4', auth });
+  const drive  = google.drive({ version: 'v3', auth });
 
-  // 1. Check if sheet has a header row
+  // ── Handle file uploads to Drive ───────────────────────────────
+  if (files && Object.keys(files).length) {
+    for (const [label, fileObj] of Object.entries(files)) {
+      if (!fileObj?.base64) continue;
+      try {
+        const buf = Buffer.from(fileObj.base64, 'base64');
+        const { Readable } = require('stream');
+        const stream = new Readable();
+        stream.push(buf);
+        stream.push(null);
+
+        const driveRes = await drive.files.create({
+          requestBody: {
+            name:    fileObj.fileName || 'upload',
+            parents: [],            // uploads to root — organiser can move
+          },
+          media: { mimeType: fileObj.mimeType || 'application/octet-stream', body: stream },
+          fields: 'id,webViewLink',
+        });
+
+        // Make publicly viewable
+        await drive.permissions.create({
+          fileId:   driveRes.data.id,
+          requestBody: { role: 'reader', type: 'anyone' },
+        });
+
+        // Replace placeholder with Drive link
+        data[label] = driveRes.data.webViewLink || `https://drive.google.com/file/d/${driveRes.data.id}/view`;
+      } catch (uploadErr) {
+        console.warn('[appendRowToSheet] File upload failed:', uploadErr.message);
+        data[label] = `${files[label]?.fileName || 'file'} (upload failed)`;
+      }
+    }
+  }
+
+  // ── Check / create header row ───────────────────────────────────
   const meta = await sheets.spreadsheets.values.get({
     spreadsheetId: sheetId,
     range: 'Sheet1!1:1',
   });
 
   const existingHeaders = (meta.data.values?.[0] || []).map(h => h.toString().trim());
-  const dataKeys = Object.keys(data);
-
+  const dataKeys        = Object.keys(data).filter(k => !k.startsWith('_'));
   let headerRow;
+  let isNewHeader = false;
 
   if (!existingHeaders.length) {
-    // Fresh sheet — write headers
     headerRow = ['Timestamp', ...dataKeys];
+    isNewHeader = true;
     await sheets.spreadsheets.values.update({
       spreadsheetId: sheetId,
       range: 'Sheet1!A1',
-      valueInputOption: 'RAW',
+      valueInputOption: 'USER_ENTERED',
       requestBody: { values: [headerRow] },
+    });
+
+    // Style the header row: bold, dark bg, cyan text
+    await sheets.spreadsheets.batchUpdate({
+      spreadsheetId: sheetId,
+      requestBody: {
+        requests: [
+          {
+            repeatCell: {
+              range: { sheetId: 0, startRowIndex: 0, endRowIndex: 1 },
+              cell: {
+                userEnteredFormat: {
+                  backgroundColor: { red: 0.016, green: 0.031, blue: 0.059 },
+                  textFormat: {
+                    bold: true,
+                    foregroundColor: { red: 0, green: 0.831, blue: 1 },
+                    fontSize: 11,
+                  },
+                  horizontalAlignment: 'LEFT',
+                },
+              },
+              fields: 'userEnteredFormat(backgroundColor,textFormat,horizontalAlignment)',
+            },
+          },
+          {
+            updateSheetProperties: {
+              properties: { sheetId: 0, gridProperties: { frozenRowCount: 1 } },
+              fields: 'gridProperties.frozenRowCount',
+            },
+          },
+        ],
+      },
     });
   } else {
     headerRow = existingHeaders;
-    // Add any new columns that don't exist yet
     const newCols = dataKeys.filter(k => !existingHeaders.includes(k));
     if (newCols.length) {
       const updatedHeaders = [...existingHeaders, ...newCols];
       await sheets.spreadsheets.values.update({
         spreadsheetId: sheetId,
         range: 'Sheet1!A1',
-        valueInputOption: 'RAW',
+        valueInputOption: 'USER_ENTERED',
         requestBody: { values: [updatedHeaders] },
       });
       headerRow = updatedHeaders;
     }
   }
 
-  // 2. Build the data row aligned to header columns
+  // ── Build the data row ──────────────────────────────────────────
   const timestamp = new Date().toLocaleString('en-IN', {
     timeZone: 'Asia/Kolkata',
     day: '2-digit', month: 'short', year: 'numeric',
@@ -160,22 +220,28 @@ async function appendRowToSheet(auth, sheetId, data) {
   const row = headerRow.map(col => {
     if (col === 'Timestamp') return timestamp;
     const val = data[col];
+    if (val === undefined || val === null) return '';
     if (Array.isArray(val)) return val.join(', ');
-    return val !== undefined && val !== null ? String(val) : '';
+    const str = String(val);
+    // Render Drive URLs as HYPERLINK formula for clickable links in Sheets
+    if (str.startsWith('https://drive.google.com') || str.startsWith('https://docs.google.com')) {
+      return `=HYPERLINK("${str}","View File")`;
+    }
+    return str;
   });
 
-  // 3. Append the row
+  // ── Append the row ──────────────────────────────────────────────
   const appendRes = await sheets.spreadsheets.values.append({
     spreadsheetId: sheetId,
     range: 'Sheet1!A1',
-    valueInputOption: 'RAW',
+    valueInputOption: 'USER_ENTERED',   // allows HYPERLINK formula
     insertDataOption: 'INSERT_ROWS',
     requestBody: { values: [row] },
   });
 
   return {
     updatedRange: appendRes.data.updates?.updatedRange,
-    rowsAdded: appendRes.data.updates?.updatedRows || 1,
+    rowsAdded:    appendRes.data.updates?.updatedRows || 1,
   };
 }
 
@@ -194,7 +260,7 @@ async function createSheetForSite(auth, siteName) {
       sheets: [
         {
           properties: {
-            title: 'Sheet1',
+            title:     'Sheet1',
             gridProperties: { frozenRowCount: 1 },
           },
         },
@@ -234,7 +300,7 @@ async function createSheetForSite(auth, siteName) {
 ═══════════════════════════════════════════════════════════════ */
 router.post('/submit', async (req, res) => {
   try {
-    const { siteId, sheetId, slug, data, submittedAt, userAgent } = req.body;
+    const { siteId, sheetId, slug, data, files, meta, submittedAt, userAgent } = req.body;
 
     // ── Basic validation
     if (!data || typeof data !== 'object' || !Object.keys(data).length) {
@@ -246,8 +312,7 @@ router.post('/submit', async (req, res) => {
 
     // ── Rate limit by IP
     const ip = req.headers['x-forwarded-for']?.split(',')[0] || req.ip || 'unknown';
-    const siteKey = siteId || slug || 'unknown';
-    if (checkRateLimit(ip, siteKey)) {
+    if (checkRateLimit(ip)) {
       return res.status(429).json({ error: 'Too many submissions. Please try again later.' });
     }
 
@@ -292,7 +357,7 @@ router.post('/submit', async (req, res) => {
     const { data: organizer } = await supabase
       .from('users')
       .select('access_token, refresh_token, google_id')
-      .eq('google_id', siteRecord.user_id)
+      .eq('id', siteRecord.user_id)
       .single();
 
     if (!organizer) {
@@ -300,25 +365,13 @@ router.post('/submit', async (req, res) => {
     }
 
     // ── Build OAuth client with organizer's tokens
-    // Debug: log what we actually have (remove after confirming fix works)
-    console.log('[minisite/submit] organizer tokens —',
-      'access_token:', organizer.access_token ? 'present' : 'NULL',
-      'refresh_token:', organizer.refresh_token ? 'present' : 'NULL'
-    );
-
-    if (!organizer.refresh_token) {
-      return res.status(503).json({
-        error: 'The organiser\'s Google account needs to be reconnected. Please ask the organiser to log out of Honourix and log back in.'
-      });
-    }
-
     const oauth2 = new google.auth.OAuth2(
       process.env.GOOGLE_CLIENT_ID,
       process.env.GOOGLE_CLIENT_SECRET,
       process.env.GOOGLE_REDIRECT_URI
     );
     oauth2.setCredentials({
-      access_token: organizer.access_token,
+      access_token:  organizer.access_token,
       refresh_token: organizer.refresh_token,
     });
     // Persist any token refresh
@@ -336,7 +389,7 @@ router.post('/submit', async (req, res) => {
     delete cleanData.hp_field;
 
     // ── Append to Sheet
-    const result = await appendRowToSheet(oauth2, targetSheetId, cleanData);
+    const result = await appendRowToSheet(oauth2, targetSheetId, cleanData, files);
 
     // ── Increment submission count in Supabase
     await supabase
@@ -345,15 +398,14 @@ router.post('/submit', async (req, res) => {
       .eq('id', siteRecord.id);
 
     return res.json({
-      ok: true,
-      rowsAdded: result.rowsAdded,
+      ok:           true,
+      rowsAdded:    result.rowsAdded,
       updatedRange: result.updatedRange,
     });
 
   } catch (err) {
     console.error('[minisite/submit]', err.message);
-    // Return real error message so client-side toast shows the actual problem
-    return res.status(500).json({ error: err.message || 'Submission failed. Please try again.' });
+    return res.status(500).json({ error: 'Submission failed. Please try again.' });
   }
 });
 
@@ -363,7 +415,7 @@ router.post('/submit', async (req, res) => {
 ═══════════════════════════════════════════════════════════════ */
 router.post('/sheet/create', async (req, res) => {
   try {
-    const user = getUserFromToken(req);
+    const user     = getUserFromToken(req);
     const { siteId, siteName } = req.body;
     if (!siteId) return res.status(400).json({ error: 'siteId required' });
 
@@ -378,7 +430,7 @@ router.post('/sheet/create', async (req, res) => {
     if (!site) return res.status(404).json({ error: 'Site not found' });
     if (site.sheet_id) return res.json({ sheetId: site.sheet_id, alreadyExists: true });
 
-    const auth = await getOAuthClient(user);
+    const auth    = await getOAuthClient(user);
     const sheetId = await createSheetForSite(auth, siteName || site.name);
 
     // Persist sheet ID to Supabase
@@ -400,10 +452,10 @@ router.post('/sheet/create', async (req, res) => {
 ═══════════════════════════════════════════════════════════════ */
 router.get('/sheet/:sheetId', async (req, res) => {
   try {
-    const user = getUserFromToken(req);
+    const user    = getUserFromToken(req);
     const { sheetId } = req.params;
-    const auth = await getOAuthClient(user);
-    const sheets = google.sheets({ version: 'v4', auth });
+    const auth    = await getOAuthClient(user);
+    const sheets  = google.sheets({ version: 'v4', auth });
 
     const meta = await sheets.spreadsheets.get({
       spreadsheetId: sheetId,
@@ -411,9 +463,9 @@ router.get('/sheet/:sheetId', async (req, res) => {
     });
 
     const firstSheet = meta.data.sheets?.[0];
-    const rowCount = (firstSheet?.properties?.gridProperties?.rowCount || 1) - 1;
-    const title = meta.data.properties?.title || '';
-    const sheetUrl = `https://docs.google.com/spreadsheets/d/${sheetId}/edit`;
+    const rowCount   = (firstSheet?.properties?.gridProperties?.rowCount || 1) - 1;
+    const title      = meta.data.properties?.title || '';
+    const sheetUrl   = `https://docs.google.com/spreadsheets/d/${sheetId}/edit`;
 
     return res.json({ ok: true, title, rowCount: Math.max(0, rowCount), sheetUrl });
   } catch (err) {
@@ -442,12 +494,12 @@ router.get('/config/:slug', async (req, res) => {
     }
 
     return res.json({
-      id: site.id,
-      name: site.name,
-      slug: site.slug,
+      id:               site.id,
+      name:             site.name,
+      slug:             site.slug,
       registrationOpen: site.registration_open !== false,
-      submissionCount: site.submission_count || 0,
-      config: site.config || {},
+      submissionCount:  site.submission_count  || 0,
+      config:           site.config || {},
     });
   } catch (err) {
     console.error('[minisite/config/:slug]', err.message);
@@ -466,42 +518,71 @@ router.post('/publish', async (req, res) => {
     const { siteId, slug, name, registrationOpen, config } = req.body;
 
     if (!siteId || !slug) return res.status(400).json({ error: 'siteId and slug required' });
-    if (slug.length < 3) return res.status(400).json({ error: 'Slug must be at least 3 characters' });
+    if (slug.length < 3)   return res.status(400).json({ error: 'Slug must be at least 3 characters' });
 
     // Slug uniqueness (excluding this site)
     const { data: existing } = await supabase
-      .from('mini_sites')
-      .select('id')
-      .eq('slug', slug)
-      .neq('id', siteId)
-      .single();
-
+      .from('mini_sites').select('id').eq('slug', slug).neq('id', siteId).single();
     if (existing) return res.status(409).json({ error: 'Slug already taken. Choose another in Site Settings.' });
 
-    // Extract sheet_id from the form block so submit route can find it via DB
-    const _formBlock = (config?.blocks || []).find(b => b.type === 'form');
-    const _sheetId = _formBlock?.props?.sheetId || null;
+    // ── AUTO SHEET CREATION ──────────────────────────────────────
+    // If a form block exists with no sheetId, auto-create a Sheet.
+    let autoSheetId  = null;
+    let autoSheetUrl = null;
+    const updatedConfig = config ? JSON.parse(JSON.stringify(config)) : {};
+
+    try {
+      const formBlock = (updatedConfig.blocks || []).find(b => b.type === 'form');
+      const existingSheetId = formBlock?.props?.sheetId
+        || (formBlock?.props?.sections || []).flatMap(s => []).find(() => false); // always empty
+      const sheetNeeded = formBlock && !formBlock?.props?.sheetId;
+
+      if (sheetNeeded) {
+        const auth = await getOAuthClient(user);
+        autoSheetId  = await createSheetForSite(auth, name || 'Untitled');
+        autoSheetUrl = `https://docs.google.com/spreadsheets/d/${autoSheetId}/edit`;
+
+        // Patch sheetId into the form block
+        updatedConfig.blocks = updatedConfig.blocks.map(b =>
+          b.type === 'form'
+            ? { ...b, props: { ...b.props, sheetId: autoSheetId } }
+            : b
+        );
+        console.log('[minisite/publish] Auto-created sheet:', autoSheetId);
+      }
+    } catch (sheetErr) {
+      // Non-fatal — log and continue. User can add Sheet ID manually.
+      console.warn('[minisite/publish] Auto sheet creation failed:', sheetErr.message);
+    }
+
+    // Extract sheet_id from form block (auto or manual)
+    const _formBlock  = (updatedConfig.blocks || []).find(b => b.type === 'form');
+    const _sheetId    = autoSheetId || _formBlock?.props?.sheetId || null;
 
     // Upsert with status = 'published'
     const { error } = await supabase
       .from('mini_sites')
       .upsert({
-        id: siteId,
-        user_id: user.googleId,
-        name: name || 'Untitled',
+        id:               siteId,
+        user_id:          user.googleId,
+        name:             name || 'Untitled',
         slug,
-        status: 'published',
+        status:           'published',
         registration_open: registrationOpen !== false,
-        sheet_id: _sheetId,
-        config: config || {},
-        updated_at: new Date().toISOString(),
+        sheet_id:         _sheetId,
+        config:           updatedConfig,
+        updated_at:       new Date().toISOString(),
       }, { onConflict: 'id' });
 
     if (error) throw new Error(error.message);
 
-    const publicUrl = `/site.html?slug=${slug}`;
-
-    return res.json({ success: true, slug, publicUrl });
+    return res.json({
+      success:  true,
+      slug,
+      publicUrl: `/site.html?slug=${slug}`,
+      sheetUrl:  autoSheetUrl,       // null if sheet already existed
+      sheetId:   _sheetId,           // the final sheet ID (auto or manual)
+    });
   } catch (err) {
     console.error('[minisite/publish]', err.message);
     return res.status(500).json({ error: err.message });
@@ -534,13 +615,13 @@ router.post('/save', async (req, res) => {
       .from('mini_sites')
       .upsert({
         id,
-        user_id: user.googleId,
-        name: name || 'Untitled',
+        user_id:           user.googleId,
+        name:              name || 'Untitled',
         slug,
-        status: status || 'draft',
+        status:            status || 'draft',
         registration_open: config?.registrationOpen !== false,
-        config: config || {},
-        updated_at: new Date().toISOString(),
+        config:            config || {},
+        updated_at:        new Date().toISOString(),
       }, { onConflict: 'id' });
 
     if (error) throw new Error(error.message);
