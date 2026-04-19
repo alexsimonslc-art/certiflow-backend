@@ -63,3 +63,5 @@ app.listen(process.env.PORT || 3000, () =>
 );
 
 app.use('/api/hxforms', require('./routes/hxforms'));
+
+app.use('/api/hxdb', require('./routes/hxdb'));
