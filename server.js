@@ -61,3 +61,4 @@ app.listen(process.env.PORT || 3000, () =>
   console.log(`Honourix backend running on port ${process.env.PORT}`)
 );
 
+app.use('/api/hxforms', require('./routes/hxforms'));
