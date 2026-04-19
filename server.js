@@ -20,6 +20,7 @@ const allowedOrigins = [
   'http://localhost:3000',
 ].filter(Boolean);
 
+app.get('/api/ping', (req, res) => res.json({ ok: true, ts: Date.now() }));
 app.use(cors({
   origin: function (origin, callback) {
     if (!origin) return callback(null, true);
