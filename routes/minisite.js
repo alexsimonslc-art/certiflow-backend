@@ -643,7 +643,7 @@ router.get('/list', async (req, res) => {
 
     const { data: sites, error } = await supabase
       .from('mini_sites')
-      .select('id, name, slug, status, registration_open, submission_count, sheet_id, updated_at, created_at')
+      .select('id, name, slug, status, config, registration_open, submission_count, sheet_id, updated_at, created_at')
       .eq('user_id', user.googleId)
       .order('updated_at', { ascending: false });
 
