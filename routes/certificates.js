@@ -198,11 +198,7 @@ router.post('/generate', async (req, res) => {
 
         // Convert % positions to absolute (PDF y is from bottom)
         const x = (field.x / 100) * template.width;
-        // pdf-lib origin is bottom-left. field.y is % from top (CSS/canvas convention).
-        // We subtract an ascender offset (~0.8 × fontSize) so the text top edge matches
-        // the editor's div top edge (textBaseline='top' equivalent).
-        const yFromTop = (field.y / 100) * template.height;
-        const y = template.height - yFromTop - (field.fontSize * -0.8);
+        const y = template.height - (field.y / 100) * template.height - (field.fontSize * 0.88);
 
         const letterSpacing = field.letterSpacing || 0;
         const fieldWidth    = (field.width / 100) * template.width;
