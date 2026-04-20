@@ -173,11 +173,16 @@ router.post('/generate', async (req, res) => {
           font = await pdfDoc.embedFont(STANDARD_FONTS[stdKey] || STANDARD_FONTS[field.fontFamily]);
 
         } else if (GOOGLE_FONTS.includes(field.fontFamily)) {
-          // Google Font — fetch TTF dynamically via CSS API
-          try {
-            const fontBytes = await fetchGoogleFontBytes(field.fontFamily, isBold, isItalic);
-            font = await pdfDoc.embedFont(fontBytes, { subset: true });
-          } catch (e) {
+            try {
+              const fontBytes = await fetchGoogleFontBytes(field.fontFamily, isBold, isItalic);
+
+              // EB Garamond (and any variable-origin font with a STAT table) breaks
+              // fontkit's subsetting. Use subset:false for these fonts.
+              const STAT_TABLE_FONTS = ['EB Garamond', 'Cormorant Garamond'];
+              const useSubset = !STAT_TABLE_FONTS.includes(field.fontFamily);
+
+              font = await pdfDoc.embedFont(fontBytes, { subset: useSubset });
+            } catch (e) {
             console.warn(`Google Font failed for ${field.fontFamily} (bold:${isBold}, italic:${isItalic}): ${e.message}`);
             // Fallback: try without bold/italic
             try {
