@@ -196,12 +196,15 @@ router.post('/generate', async (req, res) => {
         }
         const col  = hexToRgb(field.color || '#000000');
 
-        // Convert % positions to absolute (PDF y is from bottom)
         const x = (field.x / 100) * template.width;
-        const y = template.height - (field.y / 100) * template.height - (field.fontSize * 0.88);
-
+        const topY = (field.y / 100) * template.height;
         const letterSpacing = field.letterSpacing || 0;
-        const fieldWidth    = (field.width / 100) * template.width;
+        const fieldWidth = (field.width / 100) * template.width;
+
+        // Match editor box model: field.y is the top edge of the text box.
+        // pdf-lib drawText uses baseline Y, so convert topY -> baseline using ascender.
+        const ascent = font.heightAtSize(field.fontSize, { descender: false });
+        const y = template.height - topY - ascent;
 
         if (letterSpacing > 0) {
           // pdf-lib has no native letter-spacing — draw char by char
