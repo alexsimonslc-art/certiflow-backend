@@ -202,7 +202,7 @@ router.post('/generate', async (req, res) => {
         // We subtract an ascender offset (~0.8 × fontSize) so the text top edge matches
         // the editor's div top edge (textBaseline='top' equivalent).
         const yFromTop = (field.y / 100) * template.height;
-        const y = template.height - yFromTop - (field.fontSize * 0.8);
+        const y = template.height - yFromTop - (field.fontSize * -0.8);
 
         const letterSpacing = field.letterSpacing || 0;
         const fieldWidth    = (field.width / 100) * template.width;
