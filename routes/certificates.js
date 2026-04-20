@@ -209,14 +209,7 @@ router.post('/generate', async (req, res) => {
          // pdf-lib draws text from the baseline.
         // We want top-of-text alignment (matching canvas textBaseline:'top').
         // Use the font's own ascent at the given size — consistent regardless of field size.
-        let ascent;
-          try {
-            const h = font.heightAtSize(field.fontSize, { descender: false });
-            ascent = (typeof h === 'number' && !isNaN(h)) ? h : field.fontSize * 0.8;
-          } catch (_) {
-            ascent = field.fontSize * 0.8;
-          }
-          const y = template.height - topY - ascent;
+        const y = template.height - topY - (field.fontSize * 0.76);
         if (letterSpacing > 0) {
           // pdf-lib has no native letter-spacing — draw char by char
           const chars    = text.split('');
