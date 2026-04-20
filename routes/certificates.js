@@ -201,14 +201,11 @@ router.post('/generate', async (req, res) => {
         const letterSpacing = field.letterSpacing || 0;
         const fieldWidth = (field.width / 100) * template.width;
 
-         // Use the browser-measured fontBoundingBoxAscent (sent from client).
-        // This is exactly what canvas textBaseline:'top' uses, giving pixel-perfect
-        // alignment between editor, preview, and generated PDF.
-        const ascent = (field.fontBoundingBoxAscent > 0)
-          ? field.fontBoundingBoxAscent
-          : font.heightAtSize(field.fontSize, { descender: false });
+         // pdf-lib draws text from the baseline.
+        // We want top-of-text alignment (matching canvas textBaseline:'top').
+        // Use the font's own ascent at the given size — consistent regardless of field size.
+        const ascent = field.fontSize * 0.72;
         const y = template.height - topY - ascent;
-
         if (letterSpacing > 0) {
           // pdf-lib has no native letter-spacing — draw char by char
           const chars    = text.split('');
