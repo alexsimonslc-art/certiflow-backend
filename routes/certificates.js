@@ -201,9 +201,12 @@ router.post('/generate', async (req, res) => {
         const letterSpacing = field.letterSpacing || 0;
         const fieldWidth = (field.width / 100) * template.width;
 
-        // Match editor box model: field.y is the top edge of the text box.
-        // pdf-lib drawText uses baseline Y, so convert topY -> baseline using ascender.
-        const ascent = font.heightAtSize(field.fontSize, { descender: false });
+         // Use the browser-measured fontBoundingBoxAscent (sent from client).
+        // This is exactly what canvas textBaseline:'top' uses, giving pixel-perfect
+        // alignment between editor, preview, and generated PDF.
+        const ascent = (field.fontBoundingBoxAscent > 0)
+          ? field.fontBoundingBoxAscent
+          : font.heightAtSize(field.fontSize, { descender: false });
         const y = template.height - topY - ascent;
 
         if (letterSpacing > 0) {
