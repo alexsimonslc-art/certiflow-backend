@@ -58,9 +58,9 @@ app.get('/s/:slug', (req, res) => {
   res.sendFile(path.join(__dirname, '../frontend/site.html'));
 });
 
+app.use('/api/hxforms', require('./routes/hxforms'));
+app.use('/api/hxdb', require('./routes/hxdb'));
+
 app.listen(process.env.PORT || 3000, () =>
   console.log(`Honourix backend running on port ${process.env.PORT}`)
 );
-
-app.use('/api/hxforms', require('./routes/hxforms'));
-app.use('/api/hxdb', require('./routes/hxdb'));
