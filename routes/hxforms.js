@@ -441,6 +441,43 @@ router.get('/view/:slug', async (req, res) => {
 ════════════════════════════════════════════════════════════════ */
 router.post('/submit/:slug', async (req, res) => {
   try {
+    // ── Option Caps enforcement ──────────────────────────────────
+    const { data: liveForm } = await supabase
+      .from('hx_forms').select('config').eq('id', form.id).single();
+    const liveConfig = liveForm?.config || {};
+    const optionCounts = liveConfig.optionCounts || {};
+
+    for (const field of (liveConfig.fields || [])) {
+      if (!['radio','dropdown'].includes(field.type)) continue;
+      if (!field.optionCaps?.some(c => c)) continue; // no caps set
+      const submittedVal = submissionData[field.label]; // key is field label
+      if (!submittedVal) continue;
+      const optIdx = (field.options || []).indexOf(submittedVal);
+      if (optIdx < 0) continue;
+      const cap = field.optionCaps?.[optIdx];
+      if (!cap) continue;
+      const counts = optionCounts[field.id] || {};
+      const current = counts[submittedVal] || 0;
+      if (current >= cap) {
+        return res.status(409).json({ error: `"${submittedVal}" is full (${cap}/${cap} seats taken).`, optionFull: true, fieldId: field.id, option: submittedVal });
+      }
+    }
+
+    // ── Increment counts after successful sheet write ─────────────
+    // (add this AFTER the Google Sheets row append succeeds)
+    const newCounts = { ...(liveConfig.optionCounts || {}) };
+    for (const field of (liveConfig.fields || [])) {
+      if (!['radio','dropdown'].includes(field.type)) continue;
+      if (!field.optionCaps?.some(c => c)) continue;
+      const submittedVal = submissionData[field.label];
+      if (!submittedVal) continue;
+      if (!newCounts[field.id]) newCounts[field.id] = {};
+      newCounts[field.id][submittedVal] = (newCounts[field.id][submittedVal] || 0) + 1;
+    }
+    await supabase.from('hx_forms').update({
+      config: { ...liveConfig, optionCounts: newCounts },
+      submission_count: (form.submission_count || 0) + 1,
+    }).eq('id', form.id);
     // 1. Load form
     const { data: form, error } = await supabase
       .from('hx_forms')
@@ -579,5 +616,15 @@ router.post('/upload/:slug', upload.single('file'), async (req, res) => {
     res.status(500).json({ error: 'File upload failed. Please try again.' });
   }
 });
-
+router.get('/public/caps', async (req, res) => {
+  const { slug } = req.query;
+  if (!slug) return res.status(400).json({ error: 'slug required' });
+  const { data: form } = await supabase
+    .from('hx_forms').select('config').eq('slug', slug).eq('status','published').single();
+  if (!form) return res.status(404).json({ error: 'not found' });
+  res.json({
+    optionCounts: form.config?.optionCounts || {},
+    fields: (form.config?.fields || []).filter(f => ['radio','dropdown'].includes(f.type)),
+  });
+});
 module.exports = router;
