@@ -209,9 +209,9 @@ router.post('/generate', async (req, res) => {
          // pdf-lib draws text from the baseline.
         // We want top-of-text alignment (matching canvas textBaseline:'top').
         // Use the font's own ascent at the given size — consistent regardless of field size.
-        const y = template.height - topY - (field.fontSize * 0.76);
+        const baseY = template.height - topY - (field.fontSize * 0.76);
         // Calculate the exact rotation offset to match the frontend's center-based rotation
-        const rotDeg = -(field.rotation || 0); // Negative because PDF is bottom-up
+        const rotDeg = -(field.rotation || 0); // Negative because PDF is bottom-up // Negative because PDF is bottom-up
         const theta = rotDeg * Math.PI / 180;
         const cosT = Math.cos(theta);
         const sinT = Math.sin(theta);
