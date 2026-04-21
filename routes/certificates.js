@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const { google } = require('googleapis');
-const { PDFDocument, rgb, StandardFonts } = require('pdf-lib');
+const { PDFDocument, rgb, StandardFonts, degrees } = require('pdf-lib');
 const fontkit = require('@pdf-lib/fontkit');
 const axios = require('axios');
 // ── Font cache + dynamic Google Fonts fetcher ─────────────────────
@@ -210,6 +210,21 @@ router.post('/generate', async (req, res) => {
         // We want top-of-text alignment (matching canvas textBaseline:'top').
         // Use the font's own ascent at the given size — consistent regardless of field size.
         const y = template.height - topY - (field.fontSize * 0.76);
+        // Calculate the exact rotation offset to match the frontend's center-based rotation
+        const rotDeg = -(field.rotation || 0); // Negative because PDF is bottom-up
+        const theta = rotDeg * Math.PI / 180;
+        const cosT = Math.cos(theta);
+        const sinT = Math.sin(theta);
+        const pivotX = x + fieldWidth / 2;
+        const pivotY = template.height - (topY + (field.fontSize * 1.3) / 2);
+
+        const getRotatedPoint = (px, py) => {
+            return {
+                x: pivotX + (px - pivotX) * cosT - (py - pivotY) * sinT,
+                y: pivotY + (px - pivotX) * sinT + (py - pivotY) * cosT
+            };
+        };
+
         if (letterSpacing > 0) {
           // pdf-lib has no native letter-spacing — draw char by char
           const chars    = text.split('');
@@ -220,7 +235,8 @@ router.post('/generate', async (req, res) => {
 
           let cx = startX;
           for (const ch of chars) {
-            page.drawText(ch, { x: cx, y, size: field.fontSize, font, color: rgb(col.r, col.g, col.b) });
+            const pt = getRotatedPoint(cx, baseY);
+            page.drawText(ch, { x: pt.x, y: pt.y, size: field.fontSize, font, color: rgb(col.r, col.g, col.b), rotate: degrees(rotDeg) });
             cx += font.widthOfTextAtSize(ch, field.fontSize) + letterSpacing;
           }
         } else {
@@ -233,7 +249,8 @@ router.post('/generate', async (req, res) => {
             const textWidth = font.widthOfTextAtSize(text, field.fontSize);
             drawX = x + fieldWidth - textWidth;
           }
-          page.drawText(text, { x: drawX, y, size: field.fontSize, font, color: rgb(col.r, col.g, col.b) });
+          const pt = getRotatedPoint(drawX, baseY);
+          page.drawText(text, { x: pt.x, y: pt.y, size: field.fontSize, font, color: rgb(col.r, col.g, col.b), rotate: degrees(rotDeg) });
         }
       }
 
