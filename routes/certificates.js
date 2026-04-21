@@ -43,6 +43,28 @@ async function fetchGoogleFontBytes(family, bold, italic) {
   return fontResp.data;
 }
 
+// Server-side PDF Text Wrapper Engine
+function wrapTextPdf(text, maxWidth, font, fontSize, letterSpacing) {
+  if(!text) return [''];
+  const words = String(text).split(' ');
+  const lines = [];
+  let currentLine = words[0] || '';
+  for (let i = 1; i < words.length; i++) {
+    const word = words[i];
+    const testLine = currentLine + ' ' + word;
+    let testWidth = font.widthOfTextAtSize(testLine, fontSize);
+    if (letterSpacing > 0 && testLine.length > 1) testWidth += letterSpacing * (testLine.length - 1);
+    if (testWidth > maxWidth && currentLine !== '') {
+      lines.push(currentLine);
+      currentLine = word;
+    } else {
+      currentLine = testLine;
+    }
+  }
+  if (currentLine !== '') lines.push(currentLine);
+  return lines.length ? lines : [''];
+}
+
 function hexToRgb(hex) {
   const r = parseInt(hex.slice(1, 3), 16) / 255;
   const g = parseInt(hex.slice(3, 5), 16) / 255;
@@ -209,14 +231,35 @@ router.post('/generate', async (req, res) => {
          // pdf-lib draws text from the baseline.
         // We want top-of-text alignment (matching canvas textBaseline:'top').
         // Use the font's own ascent at the given size — consistent regardless of field size.
-        const baseY = template.height - topY - (field.fontSize * 0.81);
-        // Calculate the exact rotation offset to match the frontend's center-based rotation
-        const rotDeg = -(field.rotation || 0); // Negative because PDF is bottom-up // Negative because PDF is bottom-up
+        // 1. Split the text into wrapped lines based on the field's max width
+        const words = String(text).split(' ');
+        const lines = [];
+        let currentLine = words[0] || '';
+        for (let i = 1; i < words.length; i++) {
+          const word = words[i];
+          const testLine = currentLine + ' ' + word;
+          let testWidth = font.widthOfTextAtSize(testLine, field.fontSize);
+          if (letterSpacing > 0 && testLine.length > 1) testWidth += letterSpacing * (testLine.length - 1);
+          if (testWidth > fieldWidth && currentLine !== '') {
+            lines.push(currentLine);
+            currentLine = word;
+          } else {
+            currentLine = testLine;
+          }
+        }
+        if (currentLine !== '') lines.push(currentLine);
+        if (lines.length === 0) lines.push('');
+
+        const numLines = lines.length;
+
+        // 2. Calculate the exact center rotation offset based on the total height of ALL lines
+        const rotDeg = -(field.rotation || 0); // Negative because PDF is bottom-up
         const theta = rotDeg * Math.PI / 180;
         const cosT = Math.cos(theta);
         const sinT = Math.sin(theta);
+
         const pivotX = x + fieldWidth / 2;
-        const pivotY = template.height - (topY + (field.fontSize * 1.3) / 2);
+        const pivotY = template.height - (topY + (field.fontSize * 1.3 * numLines) / 2);
 
         const getRotatedPoint = (px, py) => {
             return {
@@ -225,33 +268,30 @@ router.post('/generate', async (req, res) => {
             };
         };
 
-        if (letterSpacing > 0) {
-          // pdf-lib has no native letter-spacing — draw char by char
-          const chars    = text.split('');
-          let totalWidth = chars.reduce((sum, ch) => sum + font.widthOfTextAtSize(ch, field.fontSize) + letterSpacing, -letterSpacing);
-          let startX     = x;
-          if (field.align === 'center') startX = x + (fieldWidth - totalWidth) / 2;
-          else if (field.align === 'right') startX = x + fieldWidth - totalWidth;
+        // 3. Draw each line sequentially, moving down the page
+        lines.forEach((line, idx) => {
+            // Drop baseY down for each new line using the standard 1.3 line-height multiplier
+            const lineBaseY = template.height - (topY + (idx * field.fontSize * 1.3)) - (field.fontSize * 0.81);
 
-          let cx = startX;
-          for (const ch of chars) {
-            const pt = getRotatedPoint(cx, baseY);
-            page.drawText(ch, { x: pt.x, y: pt.y, size: field.fontSize, font, color: rgb(col.r, col.g, col.b), rotate: degrees(rotDeg) });
-            cx += font.widthOfTextAtSize(ch, field.fontSize) + letterSpacing;
-          }
-        } else {
-          // No letter-spacing — use normal drawText with alignment
-          let drawX = x;
-          if (field.align === 'center') {
-            const textWidth = font.widthOfTextAtSize(text, field.fontSize);
-            drawX = x + (fieldWidth - textWidth) / 2;
-          } else if (field.align === 'right') {
-            const textWidth = font.widthOfTextAtSize(text, field.fontSize);
-            drawX = x + fieldWidth - textWidth;
-          }
-          const pt = getRotatedPoint(drawX, baseY);
-          page.drawText(text, { x: pt.x, y: pt.y, size: field.fontSize, font, color: rgb(col.r, col.g, col.b), rotate: degrees(rotDeg) });
-        }
+            let lineTotalWidth = font.widthOfTextAtSize(line, field.fontSize);
+            if (letterSpacing > 0 && line.length > 1) lineTotalWidth += letterSpacing * (line.length - 1);
+
+            let startX = x;
+            if (field.align === 'center') startX = x + (fieldWidth - lineTotalWidth) / 2;
+            else if (field.align === 'right') startX = x + fieldWidth - lineTotalWidth;
+
+            if (letterSpacing > 0) {
+                let cx = startX;
+                for (const ch of line) {
+                    const pt = getRotatedPoint(cx, lineBaseY);
+                    page.drawText(ch, { x: pt.x, y: pt.y, size: field.fontSize, font, color: rgb(col.r, col.g, col.b), rotate: degrees(rotDeg) });
+                    cx += font.widthOfTextAtSize(ch, field.fontSize) + letterSpacing;
+                }
+            } else {
+                const pt = getRotatedPoint(startX, lineBaseY);
+                page.drawText(line, { x: pt.x, y: pt.y, size: field.fontSize, font, color: rgb(col.r, col.g, col.b), rotate: degrees(rotDeg) });
+            }
+        });
       }
 
       const pdfBytes = await pdfDoc.save();
