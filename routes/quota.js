@@ -13,13 +13,19 @@ router.get('/', async (req, res) => {
                      String(today.getMonth() + 1).padStart(2, '0') + '/' +
                      String(today.getDate()).padStart(2, '0');
 
-    const msgRes    = await gmail.users.messages.list({
-      userId: 'me',
-      q: 'in:sent after:' + afterStr,
-      maxResults: 1,
-      fields: 'resultSizeEstimate',
-    });
-    const sentToday = msgRes.data.resultSizeEstimate || 0;
+    // Count actual sent messages today by paginating through results
+    let sentToday = 0;
+    let pageToken = undefined;
+    do {
+      const msgRes = await gmail.users.messages.list({
+        userId: 'me',
+        q: 'in:sent after:' + afterStr,
+        maxResults: 500,
+        ...(pageToken ? { pageToken } : {}),
+      });
+      sentToday += (msgRes.data.messages || []).length;
+      pageToken  = msgRes.data.nextPageToken;
+    } while (pageToken);
 
     const profileRes  = await gmail.users.getProfile({ userId: 'me' });
     const emailAddr   = profileRes.data.emailAddress || '';
