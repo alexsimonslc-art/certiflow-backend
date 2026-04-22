@@ -65,6 +65,28 @@ function wrapTextPdf(text, maxWidth, font, fontSize, letterSpacing) {
   return lines.length ? lines : [''];
 }
 
+// Server-side PDF Text Wrapper Engine
+function wrapTextPdf(text, maxWidth, font, fontSize, letterSpacing) {
+  if(!text) return [''];
+  const words = String(text).split(' ');
+  const lines = [];
+  let currentLine = words[0] || '';
+  for (let i = 1; i < words.length; i++) {
+    const word = words[i];
+    const testLine = currentLine + ' ' + word;
+    let testWidth = font.widthOfTextAtSize(testLine, fontSize);
+    if (letterSpacing > 0 && testLine.length > 1) testWidth += letterSpacing * (testLine.length - 1);
+    if (testWidth > maxWidth && currentLine !== '') {
+      lines.push(currentLine);
+      currentLine = word;
+    } else {
+      currentLine = testLine;
+    }
+  }
+  if (currentLine !== '') lines.push(currentLine);
+  return lines.length ? lines : [''];
+}
+
 function hexToRgb(hex) {
   const r = parseInt(hex.slice(1, 3), 16) / 255;
   const g = parseInt(hex.slice(3, 5), 16) / 255;
@@ -90,7 +112,7 @@ async function getOrCreateFolder(drive, campaignName) {
   return folder.data.id;
 }
 
-// Generate certificates from custom template (no Slides needed)
+// Generate certificates using Real-Time Chunked Streaming
 router.post('/generate', async (req, res) => {
   const { campaignName, template, participants, nameCol, emailCol, sheetId, writeBack } = req.body;
 
@@ -98,166 +120,109 @@ router.post('/generate', async (req, res) => {
     return res.status(400).json({ error: 'Missing template or participants' });
   }
 
+  // ── 1. Initialize Real-Time Streaming Headers ──
+  res.setHeader('Content-Type', 'application/x-ndjson');
+  res.setHeader('Transfer-Encoding', 'chunked');
+
+  const sendEvent = (type, message, data = {}) => {
+    res.write(JSON.stringify({ type, message, ...data }) + '\n');
+  };
+
   const drive  = google.drive({ version: 'v3', auth: req.oauth2Client });
   const sheets = google.sheets({ version: 'v4', auth: req.oauth2Client });
 
-  // Auto-create Drive folder
+  sendEvent('info', 'Connecting to Google Drive...');
+
+  // ── 2. Auto-create Drive folder ──
   let folderId;
   try {
     folderId = await getOrCreateFolder(drive, campaignName || 'Certificates');
+    sendEvent('info', `Folder ready: "Honourix — ${campaignName || 'Certificates'}"`);
   } catch (e) {
-    return res.status(500).json({ error: 'Could not create Drive folder: ' + e.message });
+    sendEvent('error', 'Could not create Drive folder: ' + e.message);
+    return res.end();
   }
+
+  sendEvent('info', `Processing ${participants.length} certificates in bulk. Please hold on...`);
 
   const results = [];
 
+  // ── 3. Live Batch Generation Loop ──
   for (let i = 0; i < participants.length; i++) {
     const row = participants[i];
     const name = row[nameCol] || `Person ${i + 1}`;
 
     try {
-      // 1. Create PDF from template
       const pdfDoc = await PDFDocument.create();
       pdfDoc.registerFontkit(fontkit);
       const page = pdfDoc.addPage([template.width, template.height]);
 
-      // 2. Draw background image if present
       if (template.backgroundBase64) {
-      // ✅ Extract MIME type cleanly from the prefix only
-      const match = template.backgroundBase64.match(/^data:image\/(png|jpeg|jpg|webp);base64,/);
-      
-      if (!match) {
-        return res.status(400).json({ error: 'Unsupported image format. Use PNG or JPEG.' });
-      }
+        const match = template.backgroundBase64.match(/^data:image\/(png|jpeg|jpg|webp);base64,/);
+        if (!match) throw new Error('Unsupported image format. Use PNG or JPEG.');
+        const mimeType = match[1].toLowerCase();
+        const base64Data = template.backgroundBase64.replace(/^data:image\/\w+;base64,/, '');
+        const imgBytes = Buffer.from(base64Data, 'base64');
 
-      const mimeType = match[1].toLowerCase(); // safely get 'jpeg', 'jpg', or 'png'
-      const base64Data = template.backgroundBase64.replace(/^data:image\/\w+;base64,/, '');
-      const imgBytes = Buffer.from(base64Data, 'base64');
-
-      let img;
-      if (mimeType === 'jpeg' || mimeType === 'jpg') {
-        img = await pdfDoc.embedJpg(imgBytes);
+        let img = (mimeType === 'jpeg' || mimeType === 'jpg') ? await pdfDoc.embedJpg(imgBytes) : await pdfDoc.embedPng(imgBytes);
+        page.drawImage(img, { x: 0, y: 0, width: template.width, height: template.height });
       } else {
-        img = await pdfDoc.embedPng(imgBytes);
+        page.drawRectangle({ x: 0, y: 0, width: template.width, height: template.height, color: rgb(1, 1, 1) });
       }
 
-      page.drawImage(img, { x: 0, y: 0, width: template.width, height: template.height });
-
-    } else {
-      page.drawRectangle({ x: 0, y: 0, width: template.width, height: template.height, color: rgb(1, 1, 1) });
-    }
-
-      // 3. Draw each text field
       for (const field of template.fields) {
         let text = field.placeholder;
-        // Replace placeholders with actual data
         Object.keys(row).forEach(col => {
           text = text.replace(new RegExp(`{{${col}}}`, 'gi'), row[col] || '');
         });
-        // Also replace by mapped column name
-        if (field.column && row[field.column]) {
-          text = row[field.column];
-        }
+        if (field.column && row[field.column]) text = row[field.column];
 
         const STANDARD_FONTS = {
-          'Helvetica':              StandardFonts.Helvetica,
-          'Helvetica-Bold':         StandardFonts.HelveticaBold,
-          'Helvetica-Italic':       StandardFonts.HelveticaOblique,
-          'Helvetica-BoldItalic':   StandardFonts.HelveticaBoldOblique,
-          'Times New Roman':        StandardFonts.TimesRoman,
-          'Times New Roman-Bold':   StandardFonts.TimesRomanBold,
-          'Times New Roman-Italic': StandardFonts.TimesRomanItalic,
-          'Times New Roman-BoldItalic': StandardFonts.TimesRomanBoldItalic,
-          'Courier New':            StandardFonts.Courier,
-          'Courier New-Bold':       StandardFonts.CourierBold,
-          'Courier New-Italic':     StandardFonts.CourierOblique,
-          'Courier New-BoldItalic': StandardFonts.CourierBoldOblique,
+          'Helvetica': StandardFonts.Helvetica, 'Helvetica-Bold': StandardFonts.HelveticaBold,
+          'Helvetica-Italic': StandardFonts.HelveticaOblique, 'Helvetica-BoldItalic': StandardFonts.HelveticaBoldOblique,
+          'Times New Roman': StandardFonts.TimesRoman, 'Times New Roman-Bold': StandardFonts.TimesRomanBold,
+          'Times New Roman-Italic': StandardFonts.TimesRomanItalic, 'Times New Roman-BoldItalic': StandardFonts.TimesRomanBoldItalic,
+          'Courier New': StandardFonts.Courier, 'Courier New-Bold': StandardFonts.CourierBold,
+          'Courier New-Italic': StandardFonts.CourierOblique, 'Courier New-BoldItalic': StandardFonts.CourierBoldOblique,
         };
 
-        // Google Fonts that we support (just the family names — fetched dynamically)
-        const GOOGLE_FONTS = [
-          'Montserrat', 'Raleway', 'Plus Jakarta Sans', 'EB Garamond',
-          'Playfair Display', 'Cormorant Garamond', 'Dancing Script',
-          'Cinzel', 'JetBrains Mono',
-        ];
+        const GOOGLE_FONTS = ['Montserrat', 'Raleway', 'Plus Jakarta Sans', 'EB Garamond', 'Playfair Display', 'Cormorant Garamond', 'Dancing Script', 'Cinzel', 'JetBrains Mono'];
 
         let font;
-        const isBold   = !!field.bold;
-        const isItalic = !!field.italic;
-        const variantSuffix = (isBold && isItalic) ? '-BoldItalic'
-                            : isBold               ? '-Bold'
-                            : isItalic              ? '-Italic'
-                            : '';
+        const isBold = !!field.bold; const isItalic = !!field.italic;
+        const variantSuffix = (isBold && isItalic) ? '-BoldItalic' : isBold ? '-Bold' : isItalic ? '-Italic' : '';
 
         if (STANDARD_FONTS[field.fontFamily] || STANDARD_FONTS[field.fontFamily + variantSuffix]) {
-          // Standard PDF font — pick the right bold/italic variant
           const stdKey = field.fontFamily + variantSuffix;
           font = await pdfDoc.embedFont(STANDARD_FONTS[stdKey] || STANDARD_FONTS[field.fontFamily]);
-
         } else if (GOOGLE_FONTS.includes(field.fontFamily)) {
             try {
               const fontBytes = await fetchGoogleFontBytes(field.fontFamily, isBold, isItalic);
-
-              // EB Garamond (and any variable-origin font with a STAT table) breaks
-              // fontkit's subsetting. Use subset:false for these fonts.
-              const STAT_TABLE_FONTS = ['EB Garamond', 'Cormorant Garamond'];
-              const useSubset = !STAT_TABLE_FONTS.includes(field.fontFamily);
-
+              const useSubset = !['EB Garamond', 'Cormorant Garamond'].includes(field.fontFamily);
               font = await pdfDoc.embedFont(fontBytes, { subset: useSubset });
             } catch (e) {
-            console.warn(`Google Font failed for ${field.fontFamily} (bold:${isBold}, italic:${isItalic}): ${e.message}`);
-            // Fallback: try without bold/italic
-            try {
-              const fallbackBytes = await fetchGoogleFontBytes(field.fontFamily, false, false);
-              font = await pdfDoc.embedFont(fallbackBytes, { subset: true });
-            } catch (e2) {
-              console.warn(`Google Font fallback also failed, using Helvetica: ${e2.message}`);
               const fallbackKey = 'Helvetica' + variantSuffix;
               font = await pdfDoc.embedFont(STANDARD_FONTS[fallbackKey] || StandardFonts.Helvetica);
             }
-          }
         } else {
-          // Unknown font — use Helvetica with correct bold/italic
           const fallbackKey = 'Helvetica' + variantSuffix;
           font = await pdfDoc.embedFont(STANDARD_FONTS[fallbackKey] || StandardFonts.Helvetica);
         }
-        const col  = hexToRgb(field.color || '#000000');
 
+        const col  = hexToRgb(field.color || '#000000');
         const x = (field.x / 100) * template.width;
         const topY = (field.y / 100) * template.height;
         const letterSpacing = field.letterSpacing || 0;
         const fieldWidth = (field.width / 100) * template.width;
 
-         // pdf-lib draws text from the baseline.
-        // We want top-of-text alignment (matching canvas textBaseline:'top').
-        // Use the font's own ascent at the given size — consistent regardless of field size.
-        // 1. Split the text into wrapped lines based on the field's max width
-        const words = String(text).split(' ');
-        const lines = [];
-        let currentLine = words[0] || '';
-        for (let i = 1; i < words.length; i++) {
-          const word = words[i];
-          const testLine = currentLine + ' ' + word;
-          let testWidth = font.widthOfTextAtSize(testLine, field.fontSize);
-          if (letterSpacing > 0 && testLine.length > 1) testWidth += letterSpacing * (testLine.length - 1);
-          if (testWidth > fieldWidth && currentLine !== '') {
-            lines.push(currentLine);
-            currentLine = word;
-          } else {
-            currentLine = testLine;
-          }
-        }
-        if (currentLine !== '') lines.push(currentLine);
-        if (lines.length === 0) lines.push('');
-
+        // Apply Multi-Line Wrapping Math & Rotation
+        const lines = wrapTextPdf(text, fieldWidth, font, field.fontSize, letterSpacing);
         const numLines = lines.length;
 
-        // 2. Calculate the exact center rotation offset based on the total height of ALL lines
-        const rotDeg = -(field.rotation || 0); // Negative because PDF is bottom-up
+        const rotDeg = -(field.rotation || 0);
         const theta = rotDeg * Math.PI / 180;
-        const cosT = Math.cos(theta);
-        const sinT = Math.sin(theta);
-
+        const cosT = Math.cos(theta); const sinT = Math.sin(theta);
+        
         const pivotX = x + fieldWidth / 2;
         const pivotY = template.height - (topY + (field.fontSize * 1.3 * numLines) / 2);
 
@@ -268,14 +233,11 @@ router.post('/generate', async (req, res) => {
             };
         };
 
-        // 3. Draw each line sequentially, moving down the page
         lines.forEach((line, idx) => {
-            // Drop baseY down for each new line using the standard 1.3 line-height multiplier
             const lineBaseY = template.height - (topY + (idx * field.fontSize * 1.3)) - (field.fontSize * 0.81);
-
             let lineTotalWidth = font.widthOfTextAtSize(line, field.fontSize);
             if (letterSpacing > 0 && line.length > 1) lineTotalWidth += letterSpacing * (line.length - 1);
-
+            
             let startX = x;
             if (field.align === 'center') startX = x + (fieldWidth - lineTotalWidth) / 2;
             else if (field.align === 'right') startX = x + fieldWidth - lineTotalWidth;
@@ -296,7 +258,7 @@ router.post('/generate', async (req, res) => {
 
       const pdfBytes = await pdfDoc.save();
 
-      // 4. Upload PDF to Drive
+      // Upload PDF to Drive
       const { Readable } = require('stream');
       const stream = Readable.from(Buffer.from(pdfBytes));
       const uploaded = await drive.files.create({
@@ -305,7 +267,6 @@ router.post('/generate', async (req, res) => {
         fields: 'id, webViewLink',
       });
 
-      // 5. Make shareable
       await drive.permissions.create({
         fileId: uploaded.data.id,
         requestBody: { role: 'reader', type: 'anyone' },
@@ -313,7 +274,6 @@ router.post('/generate', async (req, res) => {
 
       const link = uploaded.data.webViewLink;
 
-      // 6. Write back to Sheet
       if (writeBack && sheetId) {
         await sheets.spreadsheets.values.update({
           spreadsheetId: sheetId,
@@ -323,16 +283,23 @@ router.post('/generate', async (req, res) => {
         });
       }
 
-      results.push({ name, email: row[emailCol] || '', link, status: 'success' });
+      // STREAM SUCCESS EVENT LIVE
+      const resultData = { name, email: row[emailCol] || '', link, status: 'success' };
+      results.push(resultData);
+      sendEvent('success', `✓ Generated & uploaded certificate for ${name}`, { result: resultData });
 
     } catch (err) {
       console.error(`Failed for ${name}:`, err.message);
-      results.push({ name, email: row[emailCol] || '', link: '', status: 'failed', error: err.message });
+      // STREAM ERROR EVENT LIVE
+      const resultData = { name, email: row[emailCol] || '', link: '', status: 'failed', error: err.message };
+      results.push(resultData);
+      sendEvent('error', `✗ Failed for ${name} — ${err.message}`, { result: resultData });
     }
   }
 
   const folderLink = `https://drive.google.com/drive/folders/${folderId}`;
-  res.json({ results, folderId, folderLink, total: participants.length, success: results.filter(r => r.status === 'success').length });
+  sendEvent('done', 'All certificates generated successfully!', { folderId, folderLink, total: participants.length, results });
+  res.end();
 });
 
 module.exports = router;
