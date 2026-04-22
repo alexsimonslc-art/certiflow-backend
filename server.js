@@ -64,3 +64,6 @@ app.use('/api/hxdb', require('./routes/hxdb'));
 app.listen(process.env.PORT || 3000, () =>
   console.log(`Honourix backend running on port ${process.env.PORT}`)
 );
+
+const quotaRoutes = require('./routes/quota');
+app.use('/api/quota', quotaRoutes);
