@@ -112,7 +112,7 @@ async function getOrCreateFolder(drive, campaignName) {
   return folder.data.id;
 }
 
-// Generate certificates using Real-Time Chunked Streaming
+// Generate certificates using Real-Time Chunked Streaming (ENTERPRISE BULK OPTIMIZED)
 router.post('/generate', async (req, res) => {
   const { campaignName, template, participants, nameCol, emailCol, sheetId, writeBack } = req.body;
 
@@ -146,6 +146,7 @@ router.post('/generate', async (req, res) => {
   sendEvent('info', `Processing ${participants.length} certificates in bulk. Please hold on...`);
 
   const results = [];
+  const bulkLinks = [['Certificate Link']]; // Header for our bulk Sheets update
 
   // ── 3. Live Batch Generation Loop ──
   for (let i = 0; i < participants.length; i++) {
@@ -273,27 +274,57 @@ router.post('/generate', async (req, res) => {
       });
 
       const link = uploaded.data.webViewLink;
+      bulkLinks.push([link]); // Save for bulk write-back
 
-      if (writeBack && sheetId) {
-        await sheets.spreadsheets.values.update({
-          spreadsheetId: sheetId,
-          range: `Sheet1!Z${i + 2}`,
-          valueInputOption: 'RAW',
-          requestBody: { values: [[link]] },
-        });
-      }
+      // THROTTLE: Pause for 300ms to protect Google Drive APIs from rate-limiting
+      await new Promise(res => setTimeout(res, 300));
 
-      // STREAM SUCCESS EVENT LIVE
       const resultData = { name, email: row[emailCol] || '', link, status: 'success' };
       results.push(resultData);
       sendEvent('success', `✓ Generated & uploaded certificate for ${name}`, { result: resultData });
 
     } catch (err) {
       console.error(`Failed for ${name}:`, err.message);
-      // STREAM ERROR EVENT LIVE
+      bulkLinks.push([`Error: ${err.message}`]); // Still write something to the sheet to maintain row order
       const resultData = { name, email: row[emailCol] || '', link: '', status: 'failed', error: err.message };
       results.push(resultData);
       sendEvent('error', `✗ Failed for ${name} — ${err.message}`, { result: resultData });
+    }
+  }
+
+  // ── 4. Bulk Write-Back to Google Sheets ──
+  if (writeBack && sheetId) {
+    sendEvent('info', 'Saving all links to your Google Sheet...');
+    try {
+      // Find how many columns the sheet currently has
+      const sheetData = await sheets.spreadsheets.values.get({ spreadsheetId: sheetId, range: 'Sheet1!1:1' });
+      const numCols = sheetData.data.values && sheetData.data.values[0] ? sheetData.data.values[0].length : 0;
+
+      // Function to convert column number to letter (e.g. 1 -> A, 27 -> AA)
+      const getColLetter = (colIndex) => {
+          let letter = '';
+          while (colIndex > 0) {
+              let temp = (colIndex - 1) % 26;
+              letter = String.fromCharCode(temp + 65) + letter;
+              colIndex = (colIndex - temp - 1) / 26;
+          }
+          return letter;
+      };
+      
+      const writeCol = getColLetter(numCols + 1);
+      const range = `Sheet1!${writeCol}1:${writeCol}${bulkLinks.length}`;
+
+      // Do ONE massive update instead of 500 individual ones
+      await sheets.spreadsheets.values.update({
+        spreadsheetId: sheetId,
+        range: range,
+        valueInputOption: 'USER_ENTERED',
+        requestBody: { values: bulkLinks }
+      });
+      
+      sendEvent('info', `✓ Successfully added Certificate Links to Column ${writeCol}!`);
+    } catch (err) {
+      sendEvent('error', 'Could not write to Google Sheet: ' + err.message);
     }
   }
 
