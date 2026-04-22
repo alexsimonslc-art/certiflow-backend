@@ -31,9 +31,30 @@ router.get('/', async (req, res) => {
     const driveUsed  = parseInt(sq.usage  || '0');
     const driveTotal = parseInt(sq.limit  || '16106127360');
 
-    res.json({ sentToday, dailyLimit, isWorkspace, driveUsed, driveTotal, certsToday: 0 });
+    res.json({
+      sentToday,
+      dailyLimit,
+      isWorkspace,
+      driveUsed,
+      driveTotal,
+      certsToday: 0,
+      email: emailAddr,
+      limit: isWorkspace ? 1500 : 100,   // Platform limits (stricter than Google's raw limits)
+      totalSent: sentToday,              // We use today's count; no lifetime store yet
+    });
   } catch (e) {
     console.error('Quota error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// POST /api/quota/increment — called after each successful email send
+router.post('/increment', async (req, res) => {
+  try {
+    // We rely on Gmail's live count, so this is just an acknowledgement.
+    // The GET /api/quota endpoint re-queries Gmail on every call.
+    res.json({ ok: true });
+  } catch (e) {
     res.status(500).json({ error: e.message });
   }
 });
