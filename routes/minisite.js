@@ -478,6 +478,33 @@ router.get('/sheet/:sheetId', async (req, res) => {
    ROUTE 4 — GET /api/minisite/config/:slug (PUBLIC)
    Fetch a published site's config for the public site.html renderer.
 ═══════════════════════════════════════════════════════════════ */
+// ─── Check Global Slug Availability ───
+router.get('/check-slug', async (req, res) => {
+  try {
+    const { slug } = req.query;
+    if (!slug) {
+      return res.status(400).json({ error: 'Slug is required' });
+    }
+
+    // Check your 'mini_sites' table globally across ALL users
+    const { data, error } = await supabase
+      .from('mini_sites') 
+      .select('id')
+      .eq('slug', slug)
+      .limit(1);
+
+    if (error) throw error;
+
+    // If the data array is empty, the slug is NOT taken (it is available)
+    const isAvailable = data.length === 0;
+
+    return res.json({ available: isAvailable });
+  } catch (err) {
+    console.error('[minisite/check-slug]', err.message);
+    return res.status(500).json({ error: 'Server error checking slug' });
+  }
+});
+
 router.get('/config/:slug', async (req, res) => {
   try {
     const { slug } = req.params;
