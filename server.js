@@ -61,6 +61,7 @@ app.get('/s/:slug', (req, res) => {
 app.use('/api/hxforms', require('./routes/hxforms'));
 app.use('/api/hxdb', require('./routes/hxdb'));
 app.use('/api/ai', verifyToken, require('./routes/ai'));
+app.use('/api/minisite-ai', verifyToken, require('./routes/minisite-ai'));
 
 app.listen(process.env.PORT || 3000, () =>
   console.log(`Honourix backend running on port ${process.env.PORT}`)
