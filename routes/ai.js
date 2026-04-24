@@ -169,7 +169,7 @@ router.post('/minisite-chat', async (req, res) => {
     if (!apiKey) return res.status(500).json({ error: 'GEMINI_API_KEY not configured' });
 
     const genAI = new GoogleGenerativeAI(apiKey);
-    const model = genAI.getGenerativeModel({ model: 'gemini-2.0-flash', systemInstruction: MINISITE_PROMPT });
+    const model = genAI.getGenerativeModel({ model: 'gemini-2.0-flash-lite', systemInstruction: MINISITE_PROMPT });
 
     const history = (chatHistory || []).slice(-8).map(m => ({
       role: m.role === 'user' ? 'user' : 'model',
