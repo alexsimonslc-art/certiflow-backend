@@ -23,71 +23,78 @@ router.post('/', async (req, res) => {
 
     // Only create a backup sheet for cert / combined types
     if (type !== 'mail' && backup_data && backup_data.length > 0) {
-      const oauth2Client = new google.auth.OAuth2(
-        process.env.GOOGLE_CLIENT_ID,
-        process.env.GOOGLE_CLIENT_SECRET,
-        process.env.GOOGLE_REDIRECT_URI
-      );
-      oauth2Client.setCredentials({ access_token: req.user.accessToken });
-
-      const drive  = google.drive({ version: 'v3', auth: oauth2Client });
-      const sheets = google.sheets({ version: 'v4', auth: oauth2Client });
-
-      // ── Find target folder ──────────────────────────────────
-      let targetFolderId = folder_id || null;
-      if (!targetFolderId) {
-        // Fall back: look up the folder by campaign name (combined-tool path)
-        const folderName = `Honourix — ${name}`;
-        const found = await drive.files.list({
-          q: `name='${folderName}' and mimeType='application/vnd.google-apps.folder' and trashed=false`,
-          fields: 'files(id)',
+      try {
+        const oauth2Client = new google.auth.OAuth2(
+          process.env.GOOGLE_CLIENT_ID,
+          process.env.GOOGLE_CLIENT_SECRET,
+          process.env.GOOGLE_REDIRECT_URI
+        );
+        oauth2Client.setCredentials({
+          access_token:  req.user.accessToken,
+          refresh_token: req.user.refreshToken,
         });
-        targetFolderId = found.data.files?.[0]?.id || null;
-      }
 
-      // ── Sheet name = campaign name + date & time ────────────
-      const now   = new Date();
-      const dtStr = now.toLocaleDateString('en-IN', { day:'2-digit', month:'short', year:'numeric' })
-                  + ' ' + now.toLocaleTimeString('en-IN', { hour:'2-digit', minute:'2-digit', hour12:true });
-      const sheetTitle = `${name} — ${dtStr}`;
+        const drive  = google.drive({ version: 'v3', auth: oauth2Client });
+        const sheets = google.sheets({ version: 'v4', auth: oauth2Client });
 
-      // ── Create the spreadsheet ──────────────────────────────
-      const sheet = await sheets.spreadsheets.create({
-        requestBody: { properties: { title: sheetTitle } },
-      });
-      const spreadsheetId = sheet.data.spreadsheetId;
-      backupSheetLink     = sheet.data.spreadsheetUrl;
+        // ── Find target folder ──────────────────────────────────
+        let targetFolderId = folder_id || null;
+        if (!targetFolderId) {
+          const folderName = `Honourix — ${name}`;
+          const found = await drive.files.list({
+            q: `name='${folderName}' and mimeType='application/vnd.google-apps.folder' and trashed=false`,
+            fields: 'files(id)',
+          });
+          targetFolderId = found.data.files?.[0]?.id || null;
+        }
 
-      // ── Move sheet into the cert folder ────────────────────
-      if (targetFolderId) {
-        const file      = await drive.files.get({ fileId: spreadsheetId, fields: 'parents' });
-        const oldParents = (file.data.parents || []).join(',');
-        await drive.files.update({
-          fileId:        spreadsheetId,
-          addParents:    targetFolderId,
-          removeParents: oldParents,
-          fields:        'id, parents',
+        // ── Sheet name = campaign name + date & time ────────────
+        const now   = new Date();
+        const dtStr = now.toLocaleDateString('en-IN', { day:'2-digit', month:'short', year:'numeric' })
+                    + ' ' + now.toLocaleTimeString('en-IN', { hour:'2-digit', minute:'2-digit', hour12:true });
+        const sheetTitle = `${name} — ${dtStr}`;
+
+        // ── Create the spreadsheet ──────────────────────────────
+        const sheet = await sheets.spreadsheets.create({
+          requestBody: { properties: { title: sheetTitle } },
         });
+        const spreadsheetId = sheet.data.spreadsheetId;
+        backupSheetLink     = sheet.data.spreadsheetUrl;
+
+        // ── Move sheet into the cert folder ────────────────────
+        if (targetFolderId) {
+          const file       = await drive.files.get({ fileId: spreadsheetId, fields: 'parents' });
+          const oldParents = (file.data.parents || []).join(',');
+          await drive.files.update({
+            fileId:        spreadsheetId,
+            addParents:    targetFolderId,
+            removeParents: oldParents,
+            fields:        'id, parents',
+          });
+        }
+
+        // ── Write data (header + rows) ──────────────────────────
+        const headers = Object.keys(backup_data[0]);
+        const values  = [
+          headers,
+          ...backup_data.map(row => headers.map(h => String(row[h] ?? ''))),
+        ];
+        await sheets.spreadsheets.values.update({
+          spreadsheetId,
+          range:           'Sheet1!A1',
+          valueInputOption:'USER_ENTERED',
+          requestBody:     { values },
+        });
+
+        // ── Make sheet readable by anyone with link ─────────────
+        await drive.permissions.create({
+          fileId:      spreadsheetId,
+          requestBody: { role: 'reader', type: 'anyone' },
+        });
+      } catch (sheetErr) {
+        console.error('Backup sheet creation failed (campaign will still save):', sheetErr.message);
+        // backupSheetLink stays null — campaign saves without the sheet link
       }
-
-      // ── Write data (header + rows) ──────────────────────────
-      const headers = Object.keys(backup_data[0]);
-      const values  = [
-        headers,
-        ...backup_data.map(row => headers.map(h => String(row[h] ?? ''))),
-      ];
-      await sheets.spreadsheets.values.update({
-        spreadsheetId,
-        range:           'Sheet1!A1',
-        valueInputOption:'USER_ENTERED',
-        requestBody:     { values },
-      });
-
-      // ── Make sheet readable by anyone with link ─────────────
-      await drive.permissions.create({
-        fileId:      spreadsheetId,
-        requestBody: { role: 'reader', type: 'anyone' },
-      });
     }
 
     // ── Save campaign record to Supabase ────────────────────
