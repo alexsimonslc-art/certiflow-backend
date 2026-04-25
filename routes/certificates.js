@@ -120,7 +120,7 @@ async function getOrCreateFolder(drive, campaignName) {
 
 // Generate certificates using Real-Time Chunked Streaming (ENTERPRISE BULK OPTIMIZED)
 router.post('/generate', async (req, res) => {
-  const { campaignName, template, participants, nameCol, emailCol, sheetId, writeBack } = req.body;
+  const { campaignName, eventName, template, participants, nameCol, emailCol, sheetId, writeBack } = req.body;
 
   if (!template || !participants?.length) {
     return res.status(400).json({ error: 'Missing template or participants' });
@@ -265,11 +265,17 @@ router.post('/generate', async (req, res) => {
 
       const pdfBytes = await pdfDoc.save();
 
+      // Build the exact file name: Name_EventName_01.pdf
+      const sanitizedName = String(name).replace(/[^a-zA-Z0-9_\-\u0900-\u097F\u00C0-\u024F]/g, '_').replace(/_+/g,'_').replace(/^_|_$/g,'') || 'cert';
+      const eventPart = eventName ? '_' + String(eventName).replace(/[^a-zA-Z0-9_\-\u0900-\u097F\u00C0-\u024F]/g, '_').replace(/_+/g,'_').replace(/^_|_$/g,'') : '';
+      const numPart = String(i + 1).padStart(2, '0');
+      const finalFileName = `${sanitizedName}${eventPart}_${numPart}.pdf`;
+
       // Upload PDF to Drive
       const { Readable } = require('stream');
       const stream = Readable.from(Buffer.from(pdfBytes));
       const uploaded = await drive.files.create({
-        requestBody: { name: `${name}_Certificate.pdf`, parents: [folderId] },
+        requestBody: { name: finalFileName, parents: [folderId] },
         media: { mimeType: 'application/pdf', body: stream },
         fields: 'id, webViewLink',
       });
