@@ -1,6 +1,6 @@
 // @ts-nocheck
 const express = require('express');
-const router  = express.Router();
+const router = express.Router();
 const { GoogleGenerativeAI } = require('@google/generative-ai');
 const { createClient } = require('@supabase/supabase-js');
 
@@ -89,7 +89,7 @@ IMPORTANT RULES:
 
 router.post('/generate-email', async (req, res) => {
   try {
-    const { userMessage, currentBlocks = [], headers = [], chatHistory = [], selectedBlockId = null } = req.body;
+    const { userMessage, currentBlocks = [], headers = [], chatHistory = [], selectedBlockId = null, mode = 'visual', htmlModeText = '' } = req.body;
 
     if (!userMessage) return res.status(400).json({ error: 'userMessage required' });
 
@@ -106,23 +106,58 @@ router.post('/generate-email', async (req, res) => {
     const apiKey = process.env.GEMINI_API_KEY;
     if (!apiKey) return res.status(500).json({ error: 'GEMINI_API_KEY not configured' });
 
-    const genAI  = new GoogleGenerativeAI(apiKey);
-    const model  = genAI.getGenerativeModel({
+    const genAI = new GoogleGenerativeAI(apiKey);
+
+    // Choose behavior based on mode
+    let instructionToUse = SYSTEM_PROMPT;
+    if (mode === 'code') {
+      instructionToUse = `You are an expert email graphic designer and HTML/CSS coder assistant.
+You help users write and modify highly effective, valid, responsive pure HTML email code directly.
+There is NO block editor constraint here. You can use valid <style> blocks, tables, gradients, rounded corners, and any advanced email HTML techniques.
+IMPORTANT RULES:
+- Never exceed 40px for font sizes under any circumstance.
+- The user is editing raw HTML. Ensure any code provided in "html" is a complete, working HTML string or the updated raw HTML snippet depending on their request.
+- Make designs MUST look PREMIUM and MODERN.
+
+RESPONSE FORMAT:
+You MUST always respond with valid JSON only. No markdown, no explanations outside JSON.
+{
+  "action": "replace_html",
+  "html": "The full working raw HTML code snippet based on the user's request",
+  "message": "Brief friendly explanation of what you updated/created"
+}
+For conversational replies that don't change the html canvas:
+{
+  "action": "reply_only",
+  "message": "Your conversational reply here"
+}
+`;
+    } else {
+      // Modifying the standard visual mode prompt minimally in-flight to add the size rule.
+      instructionToUse += "\n- Maximum allowed font size for any block property is 40px. Do not use anything larger than 40px (e.g. 72px is forbidden).";
+    }
+
+    const model = genAI.getGenerativeModel({
       model: 'gemini-3-flash-preview',
-      systemInstruction: SYSTEM_PROMPT,
+      systemInstruction: instructionToUse,
     });
 
     // Build context for the AI
     const contextParts = [];
     if (headers.length) {
-      contextParts.push(`Available merge tags from the user's data: ${headers.map(h => '{{' + h.toLowerCase().replace(/\s+/g,'_') + '}}').join(', ')}`);
+      contextParts.push(`Available merge tags from the user's data: ${headers.map(h => '{{' + h.toLowerCase().replace(/\s+/g, '_') + '}}').join(', ')}`);
     }
-    if (currentBlocks.length) {
-      contextParts.push(`Current canvas has ${currentBlocks.length} blocks: ${JSON.stringify(currentBlocks.slice(0,3))}...`);
-    }
-    if (selectedBlockId) {
-      const sel = currentBlocks.find(b => b.id === selectedBlockId);
-      if (sel) contextParts.push(`User has selected block: ${JSON.stringify(sel)}`);
+
+    if (mode === 'code') {
+      contextParts.push(`Current HTML canvas content:\n\`\`\`html\n${htmlModeText.slice(0, 3000)}\n\`\`\``);
+    } else {
+      if (currentBlocks.length) {
+        contextParts.push(`Current canvas has ${currentBlocks.length} blocks: ${JSON.stringify(currentBlocks.slice(0, 3))}...`);
+      }
+      if (selectedBlockId) {
+        const sel = currentBlocks.find(b => b.id === selectedBlockId);
+        if (sel) contextParts.push(`User has selected block: ${JSON.stringify(sel)}`);
+      }
     }
 
     const contextString = contextParts.length ? '\n\nCONTEXT:\n' + contextParts.join('\n') : '';
@@ -166,7 +201,7 @@ router.post('/generate-email', async (req, res) => {
     // Track token usage
     try {
       const usage = result.response.usageMetadata || {};
-      const tokIn  = usage.promptTokenCount     || 0;
+      const tokIn = usage.promptTokenCount || 0;
       const tokOut = usage.candidatesTokenCount || 0;
       if (tokIn || tokOut) {
         const { data: cur } = await supabase
@@ -175,11 +210,11 @@ router.post('/generate-email', async (req, res) => {
           .eq('google_id', req.user.googleId)
           .single();
         await supabase.from('users').update({
-          ai_tokens_input:  (cur?.ai_tokens_input  || 0) + tokIn,
+          ai_tokens_input: (cur?.ai_tokens_input || 0) + tokIn,
           ai_tokens_output: (cur?.ai_tokens_output || 0) + tokOut,
         }).eq('google_id', req.user.googleId);
       }
-    } catch (_) {}
+    } catch (_) { }
 
     res.json(parsed);
   } catch (err) {
