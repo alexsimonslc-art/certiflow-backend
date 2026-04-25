@@ -70,6 +70,7 @@ router.get('/google/callback', async (req, res) => {
         account_type: accountType,
         access_token: tokens.access_token,
         refresh_token: refreshToken,  // ✅ preserves existing if Google didn't send new one
+        granted_scopes: tokens.scope || '',
       }, { onConflict: 'google_id' })
       .select()
       .single();

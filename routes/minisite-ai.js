@@ -2,6 +2,12 @@
 const express = require('express');
 const router  = express.Router();
 const { GoogleGenerativeAI } = require('@google/generative-ai');
+const { createClient } = require('@supabase/supabase-js');
+
+const supabase = createClient(
+  process.env.SUPABASE_URL,
+  process.env.SUPABASE_KEY
+);
 
 const MINISITE_PROMPT = `You are Gal AI, an intelligent AI assistant for Honourix Mini Sites.
 You help users build and edit event landing pages using a block-based system.
@@ -55,6 +61,16 @@ router.post('/chat', async (req, res) => {
     const { userMessage, chatHistory = [], blocks = [], config = {} } = req.body;
     if (!userMessage) return res.status(400).json({ error: 'userMessage required' });
 
+    // Plan gate — free users cannot use AI
+    const { data: userRow } = await supabase
+      .from('users')
+      .select('plan, plan_expires_at')
+      .eq('google_id', req.user.googleId)
+      .single();
+    const isPro = userRow?.plan === 'pro'
+      && (!userRow.plan_expires_at || new Date(userRow.plan_expires_at) > new Date());
+    if (!isPro) return res.status(403).json({ error: 'AI_LOCKED' });
+
     const apiKey = process.env.GEMINI_API_KEY;
     if (!apiKey) return res.status(500).json({ error: 'GEMINI_API_KEY not configured' });
 
@@ -103,6 +119,24 @@ router.post('/chat', async (req, res) => {
         parsed = { action: 'reply_only', message: text };
       }
     }
+
+    // Track token usage
+    try {
+      const usage = result.response.usageMetadata || {};
+      const tokIn  = usage.promptTokenCount     || 0;
+      const tokOut = usage.candidatesTokenCount || 0;
+      if (tokIn || tokOut) {
+        const { data: cur } = await supabase
+          .from('users')
+          .select('ai_tokens_input, ai_tokens_output')
+          .eq('google_id', req.user.googleId)
+          .single();
+        await supabase.from('users').update({
+          ai_tokens_input:  (cur?.ai_tokens_input  || 0) + tokIn,
+          ai_tokens_output: (cur?.ai_tokens_output || 0) + tokOut,
+        }).eq('google_id', req.user.googleId);
+      }
+    } catch (_) {}
 
     res.json(parsed);
   } catch (err) {

@@ -1,6 +1,12 @@
 const express = require('express');
 const router = express.Router();
 const { google } = require('googleapis');
+const { createClient } = require('@supabase/supabase-js');
+
+const supabase = createClient(
+  process.env.SUPABASE_URL,
+  process.env.SUPABASE_KEY
+);
 const { PDFDocument, rgb, StandardFonts, degrees } = require('pdf-lib');
 const fontkit = require('@pdf-lib/fontkit');
 const axios = require('axios');
@@ -282,6 +288,16 @@ router.post('/generate', async (req, res) => {
       const resultData = { name, email: row[emailCol] || '', link, status: 'success' };
       results.push(resultData);
       sendEvent('success', `✓ Generated & uploaded certificate for ${name}`, { result: resultData });
+
+      // Increment lifetime cert count
+      supabase.from('users')
+        .select('certs_total')
+        .eq('google_id', req.user.googleId)
+        .single()
+        .then(({ data: cur }) => supabase.from('users').update({
+          certs_total: (cur?.certs_total || 0) + 1,
+        }).eq('google_id', req.user.googleId))
+        .catch(() => {});
 
     } catch (err) {
       console.error(`Failed for ${name}:`, err.message);
