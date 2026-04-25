@@ -462,43 +462,6 @@ router.get('/view/:slug', async (req, res) => {
 ════════════════════════════════════════════════════════════════ */
 router.post('/submit/:slug', async (req, res) => {
   try {
-    // ── Option Caps enforcement ──────────────────────────────────
-    const { data: liveForm } = await supabase
-      .from('hx_forms').select('config').eq('id', form.id).single();
-    const liveConfig = liveForm?.config || {};
-    const optionCounts = liveConfig.optionCounts || {};
-
-    for (const field of (liveConfig.fields || [])) {
-      if (!['radio','dropdown'].includes(field.type)) continue;
-      if (!field.optionCaps?.some(c => c)) continue; // no caps set
-      const submittedVal = submissionData[field.label]; // key is field label
-      if (!submittedVal) continue;
-      const optIdx = (field.options || []).indexOf(submittedVal);
-      if (optIdx < 0) continue;
-      const cap = field.optionCaps?.[optIdx];
-      if (!cap) continue;
-      const counts = optionCounts[field.id] || {};
-      const current = counts[submittedVal] || 0;
-      if (current >= cap) {
-        return res.status(409).json({ error: `"${submittedVal}" is full (${cap}/${cap} seats taken).`, optionFull: true, fieldId: field.id, option: submittedVal });
-      }
-    }
-
-    // ── Increment counts after successful sheet write ─────────────
-    // (add this AFTER the Google Sheets row append succeeds)
-    const newCounts = { ...(liveConfig.optionCounts || {}) };
-    for (const field of (liveConfig.fields || [])) {
-      if (!['radio','dropdown'].includes(field.type)) continue;
-      if (!field.optionCaps?.some(c => c)) continue;
-      const submittedVal = submissionData[field.label];
-      if (!submittedVal) continue;
-      if (!newCounts[field.id]) newCounts[field.id] = {};
-      newCounts[field.id][submittedVal] = (newCounts[field.id][submittedVal] || 0) + 1;
-    }
-    await supabase.from('hx_forms').update({
-      config: { ...liveConfig, optionCounts: newCounts },
-      submission_count: (form.submission_count || 0) + 1,
-    }).eq('id', form.id);
     // 1. Load form
     const { data: form, error } = await supabase
       .from('hx_forms')
@@ -517,8 +480,8 @@ router.post('/submit/:slug', async (req, res) => {
     }
 
     // 2. Build Sheet row from submitted data
-    const submittedData = req.body.data       || {};
-    const fieldMeta     = req.body.fieldMeta  || {};
+    const submittedData = req.body.data      || {};
+    const fieldMeta     = req.body.fieldMeta || {};
     const dataFields    = (form.config?.fields || []).filter(f => f.type !== 'section_break');
     const submissionId  = randomUUID();
     const submittedAt   = new Date().toISOString();
@@ -528,10 +491,28 @@ router.post('/submit/:slug', async (req, res) => {
       submittedAt,
       ...dataFields.map(f => {
         const val = submittedData[f.id];
-        if (Array.isArray(val)) return val.join(', ');    // checkboxes
+        if (Array.isArray(val)) return val.join(', ');
         return String(val ?? '');
       }),
     ];
+
+    // ── Option Caps enforcement (before writing) ──────────────────
+    const liveConfig   = form.config || {};
+    const optionCounts = liveConfig.optionCounts || {};
+    for (const field of (liveConfig.fields || [])) {
+      if (!['radio','dropdown'].includes(field.type)) continue;
+      if (!field.optionCaps?.some(c => c)) continue;
+      const submittedVal = submittedData[field.id];
+      if (!submittedVal) continue;
+      const optIdx = (field.options || []).indexOf(submittedVal);
+      if (optIdx < 0) continue;
+      const cap = field.optionCaps?.[optIdx];
+      if (!cap) continue;
+      const current = (optionCounts[field.id]?.[submittedVal]) || 0;
+      if (current >= cap) {
+        return res.status(409).json({ error: `"${submittedVal}" is full (${cap}/${cap} seats taken).`, optionFull: true, fieldId: field.id, option: submittedVal });
+      }
+    }
 
     // 3. Write to Sheet (if sheet exists)
     let passResult = null;
@@ -604,9 +585,21 @@ router.post('/submit/:slug', async (req, res) => {
       }
     }
 
-    // 4. Increment submission_count (only thing stored in Supabase — no personal data)
+    // 4. Increment submission_count + update optionCounts
+    const newCounts = JSON.parse(JSON.stringify(optionCounts));
+    for (const field of (liveConfig.fields || [])) {
+      if (!['radio','dropdown'].includes(field.type)) continue;
+      if (!field.optionCaps?.some(c => c)) continue;
+      const submittedVal = submittedData[field.id];
+      if (!submittedVal) continue;
+      if (!newCounts[field.id]) newCounts[field.id] = {};
+      newCounts[field.id][submittedVal] = (newCounts[field.id][submittedVal] || 0) + 1;
+    }
     await supabase.from('hx_forms')
-      .update({ submission_count: (form.submission_count || 0) + 1 })
+      .update({
+        submission_count: (form.submission_count || 0) + 1,
+        config: { ...liveConfig, optionCounts: newCounts },
+      })
       .eq('id', form.id);
 
     const successMsg = form.config?.settings?.successMessage || 'Thank you for your response!';

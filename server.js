@@ -20,7 +20,6 @@ const allowedOrigins = [
   'http://localhost:3000',
 ].filter(Boolean);
 
-app.get('/api/ping', (req, res) => res.json({ ok: true, ts: Date.now() }));
 app.use(cors({
   origin: function (origin, callback) {
     if (!origin) return callback(null, true);
@@ -33,6 +32,7 @@ app.use(cors({
   allowedHeaders: ['Content-Type', 'Authorization'],
 }));
 
+app.get('/api/ping', (req, res) => res.json({ ok: true, ts: Date.now() }));
 app.use(express.json({ limit: '25mb' }));
 app.use(express.urlencoded({ limit: '25mb', extended: true }));
 app.use(session({
