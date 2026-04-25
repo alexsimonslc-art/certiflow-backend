@@ -10,11 +10,8 @@ const supabase = createClient(
   process.env.SUPABASE_KEY
 );
 
-// Import your auth middleware
-const { verifyToken } = require('../middleware/authMiddleware');
-
 // POST: Create Campaign & Backup Sheet
-router.post('/', verifyToken, async (req, res) => {
+router.post('/', async (req, res) => {
   try {
     const { name, type, total_count, sent_count, status, backup_data } = req.body;
     
@@ -74,7 +71,7 @@ router.post('/', verifyToken, async (req, res) => {
 });
 
 // GET: Fetch all campaigns for the UI
-router.get('/', verifyToken, async (req, res) => {
+router.get('/', async (req, res) => {
   try {
     const { data, error } = await supabase
       .from('campaigns')
