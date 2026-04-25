@@ -16,6 +16,12 @@ const supabase = createClient(
   process.env.SUPABASE_KEY
 );
 
+const QRCode = require('qrcode');
+
+const passSupabase = (process.env.PASS_SUPABASE_URL && process.env.PASS_SUPABASE_KEY)
+  ? createClient(process.env.PASS_SUPABASE_URL, process.env.PASS_SUPABASE_KEY)
+  : null;
+
 // Multer: memory storage, 25 MB limit
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -338,6 +344,15 @@ router.post('/publish/:id', verifyToken, async (req, res) => {
       return res.status(400).json({ error: 'Add at least one field before publishing.' });
     }
 
+    // Auto-generate passStaffCode if pass is enabled and none exists
+    let configNeedsUpdate = false;
+    if (form.config?.settings?.passEnabled && !form.config?.settings?.passStaffCode) {
+      const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+      form.config.settings.passStaffCode = Array.from({ length: 6 }, () => chars[Math.floor(Math.random() * chars.length)]).join('');
+      configNeedsUpdate = true;
+      console.log(`[hxforms] Generated passStaffCode for form ${form.id}`);
+    }
+
     // 2. Load user's refresh_token
     const { data: user } = await supabase
       .from('users').select('refresh_token, hx_root_folder_id')
@@ -378,20 +393,26 @@ router.post('/publish/:id', verifyToken, async (req, res) => {
         'Submitted At',
         ...dataFields.map(f => f.label || f.id),
       ];
+      if (form.config?.settings?.passEnabled && form.config?.settings?.passShowAttendance) {
+        headers.push('Pass Token', 'Attendance Status', 'Checked In At', 'Checked In By');
+      }
       await writeSheetHeaders(sheet_id, headers, accessToken);
 
       console.log(`[hxforms] Created Drive structure for form ${form.id}: folder=${drive_folder_id}, sheet=${sheet_id}`);
     }
 
-    // 5. Update hx_forms: status + Drive/Sheet IDs
+    // 5. Update hx_forms: status + Drive/Sheet IDs (+ config if passStaffCode was generated)
+    const publishPayload = {
+      status:            'published',
+      sheet_id,
+      drive_folder_id,
+      uploads_folder_id,
+      updated_at:        new Date().toISOString(),
+    };
+    if (configNeedsUpdate) publishPayload.config = form.config;
+
     const { data: updated, error: updateErr } = await supabase.from('hx_forms')
-      .update({
-        status:            'published',
-        sheet_id,
-        drive_folder_id,
-        uploads_folder_id,
-        updated_at:        new Date().toISOString(),
-      })
+      .update(publishPayload)
       .eq('id', form.id)
       .select('id, name, slug, status')
       .single();
@@ -481,7 +502,7 @@ router.post('/submit/:slug', async (req, res) => {
     // 1. Load form
     const { data: form, error } = await supabase
       .from('hx_forms')
-      .select('id, user_id, status, config, sheet_id, drive_folder_id, uploads_folder_id, submission_count')
+      .select('id, name, user_id, status, config, sheet_id, drive_folder_id, uploads_folder_id, submission_count')
       .eq('slug', req.params.slug)
       .single();
 
@@ -513,6 +534,7 @@ router.post('/submit/:slug', async (req, res) => {
     ];
 
     // 3. Write to Sheet (if sheet exists)
+    let passResult = null;
     if (form.sheet_id) {
       try {
         // Get organizer's refresh_token
@@ -522,14 +544,62 @@ router.post('/submit/:slug', async (req, res) => {
 
         if (user?.refresh_token) {
           const accessToken = await getAccessToken(user.refresh_token);
-          await appendSheetRow(form.sheet_id, row, accessToken);
+          const appendData  = await appendSheetRow(form.sheet_id, row, accessToken);
           console.log(`[hxforms] Appended row to sheet ${form.sheet_id} for form ${form.id}`);
+
+          // ── Generate entry pass if enabled ─────────────────────
+          if (form.config?.settings?.passEnabled === true && passSupabase) {
+            try {
+              const passToken   = randomUUID();
+              const scannerUrl  = `${process.env.FRONTEND_URL}/hx-scanner.html?token=${passToken}`;
+              const qrDataUrl   = await QRCode.toDataURL(scannerUrl, { width: 300, margin: 2, color: { dark: '#000000', light: '#ffffff' } });
+
+              const updatedRange = appendData?.updates?.updatedRange || '';
+              const rowMatch     = updatedRange.match(/:([A-Z]+)(\d+)$/);
+              const sheetRow     = rowMatch ? parseInt(rowMatch[2], 10) : null;
+
+              const nameFieldId   = form.config.settings?.passNameField;
+              const emailFieldId  = form.config.settings?.passEmailField;
+              const attendeeName  = nameFieldId  ? String(submittedData[nameFieldId]  || '') : '';
+              const attendeeEmail = emailFieldId ? String(submittedData[emailFieldId] || '') : '';
+
+              const passConfig = {
+                eventName:   form.config.settings?.passEventName  || form.name,
+                venue:       form.config.settings?.passVenue      || '',
+                date:        form.config.settings?.passDate       || '',
+                time:        form.config.settings?.passTime       || '',
+                rules:       form.config.settings?.passRules      || [],
+                bannerColor: form.config.settings?.passBannerColor || '#1a1a2e',
+                textColor:   form.config.settings?.passTextColor   || '#ffffff',
+                logoUrl:     form.config.settings?.passLogoUrl     || '',
+              };
+
+              // Fire-and-forget — do not await, do not block response
+              passSupabase.from('hx_passes').insert({
+                pass_token:      passToken,
+                form_id:         form.id,
+                form_slug:       req.params.slug,
+                submission_id:   submissionId,
+                sheet_row:       sheetRow,
+                attendee_name:   attendeeName,
+                attendee_email:  attendeeEmail,
+                submission_data: submittedData,
+                pass_config:     passConfig,
+                status:          'valid',
+              }).then(({ error: passErr }) => {
+                if (passErr) console.error('[hxforms] Pass Supabase insert failed:', passErr.message);
+              });
+
+              passResult = { enabled: true, token: passToken, qrDataUrl, config: passConfig, attendeeName, submissionId };
+            } catch (passErr) {
+              console.error('[hxforms] Pass generation failed (non-fatal):', passErr.message);
+            }
+          }
         } else {
           console.warn(`[hxforms] No refresh_token for user ${form.user_id} — skipping Sheet write`);
         }
       } catch (sheetErr) {
         // Sheet write failed — log but don't block the submission response
-        // The submitter still gets confirmation; organizer can check Supabase counter
         console.error(`[hxforms] Sheet write failed (non-fatal): ${sheetErr.message}`);
       }
     }
@@ -540,7 +610,9 @@ router.post('/submit/:slug', async (req, res) => {
       .eq('id', form.id);
 
     const successMsg = form.config?.settings?.successMessage || 'Thank you for your response!';
-    res.json({ ok: true, message: successMsg });
+    const response   = { ok: true, message: successMsg };
+    if (passResult) response.pass = passResult;
+    res.json(response);
 
   } catch (err) {
     console.error('[hxforms] submit error:', err.message);

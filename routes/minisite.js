@@ -15,6 +15,8 @@
 const express   = require('express');
 const { google } = require('googleapis');
 const jwt        = require('jsonwebtoken');
+const { randomUUID } = require('crypto');
+const QRCode    = require('qrcode');
 require('dotenv').config();
 
 const { createClient } = require('@supabase/supabase-js');
@@ -22,6 +24,10 @@ const supabase = createClient(
   process.env.SUPABASE_URL,
   process.env.SUPABASE_KEY
 );
+
+const passSupabase = (process.env.PASS_SUPABASE_URL && process.env.PASS_SUPABASE_KEY)
+  ? createClient(process.env.PASS_SUPABASE_URL, process.env.PASS_SUPABASE_KEY)
+  : null;
 
 const router = express.Router();
 
@@ -397,11 +403,74 @@ router.post('/submit', async (req, res) => {
       .update({ submission_count: (siteRecord.submission_count || 0) + 1 })
       .eq('id', siteRecord.id);
 
-    return res.json({
-      ok:           true,
-      rowsAdded:    result.rowsAdded,
-      updatedRange: result.updatedRange,
-    });
+    // ── Generate Entry Pass (fire-and-forget) ──────────────────────
+    let passResult = null;
+    const passConfig = siteRecord.config?.passConfig;
+    if (passConfig?.passEnabled === true && passSupabase) {
+      try {
+        const passToken  = randomUUID();
+        const scannerUrl = `${process.env.FRONTEND_URL}/hx-scanner.html?token=${passToken}`;
+        const qrDataUrl  = await QRCode.toDataURL(scannerUrl, {
+          width: 300, margin: 2,
+          color: { dark: '#000000', light: '#ffffff' },
+        });
+
+        // Extract row number from updatedRange (e.g. "Sheet1!A47:N47" → 47)
+        const rowMatch = (result.updatedRange || '').match(/:([A-Z]+)(\d+)$/);
+        const sheetRow = rowMatch ? parseInt(rowMatch[2], 10) : null;
+
+        // Extract attendee name/email by matching field label substrings
+        const submittedData = cleanData;
+        let attendeeName  = '';
+        let attendeeEmail = '';
+        // Use explicit mappings if configured
+        if (passConfig.passNameField) {
+          attendeeName = String(submittedData[passConfig.passNameField] || '');
+        }
+        if (passConfig.passEmailField) {
+          attendeeEmail = String(submittedData[passConfig.passEmailField] || '');
+        }
+        // Fallback: auto-detect by common key patterns
+        if (!attendeeName || !attendeeEmail) {
+          for (const [k, v] of Object.entries(submittedData)) {
+            const kl = k.toLowerCase();
+            if (!attendeeName && (kl.includes('name') || kl === 'full name')) attendeeName = String(v || '');
+            if (!attendeeEmail && (kl.includes('email'))) attendeeEmail = String(v || '');
+          }
+        }
+
+        const submissionId = `ms_${siteRecord.id}_${Date.now()}`;
+        passSupabase.from('hx_passes').insert({
+          pass_token:      passToken,
+          form_id:         siteRecord.id,
+          form_slug:       siteRecord.slug || siteRecord.id,
+          submission_id:   submissionId,
+          sheet_row:       sheetRow,
+          attendee_name:   attendeeName || null,
+          attendee_email:  attendeeEmail || null,
+          submission_data: submittedData,
+          pass_config:     passConfig,
+          status:          'valid',
+        }).then(({ error: passErr }) => {
+          if (passErr) console.error('[minisite/submit] passSupabase insert error:', passErr.message);
+        });
+
+        passResult = {
+          enabled:      true,
+          token:        passToken,
+          qrDataUrl,
+          config:       passConfig,
+          attendeeName,
+          submissionId,
+        };
+      } catch (passErr) {
+        console.error('[minisite/submit] pass generation error:', passErr.message);
+      }
+    }
+
+    const responsePayload = { ok: true, rowsAdded: result.rowsAdded, updatedRange: result.updatedRange };
+    if (passResult) responsePayload.pass = passResult;
+    return res.json(responsePayload);
 
   } catch (err) {
     console.error('[minisite/submit]', err.message);
