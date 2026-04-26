@@ -456,6 +456,33 @@ router.get('/view/:slug', async (req, res) => {
 });
 
 /* ════════════════════════════════════════════════════════════════
+   PUT /api/hxforms/:id/layout
+   Saves the GridStack dashboard layout coordinates
+════════════════════════════════════════════════════════════════ */
+router.put('/:id/layout', verifyToken, async (req, res) => {
+  try {
+    const layoutData = req.body.layout;
+
+    if (!Array.isArray(layoutData)) {
+      return res.status(400).json({ error: 'Invalid layout data format' });
+    }
+
+    const { error } = await supabase
+      .from('hx_forms')
+      .update({ dashboard_layout: layoutData })
+      .eq('id', req.params.id)
+      .eq('user_id', req.user.googleId);
+
+    if (error) throw error;
+    
+    res.json({ success: true, message: 'Layout saved successfully' });
+  } catch (err) {
+    console.error('[hxforms] layout save error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/* ════════════════════════════════════════════════════════════════
    SUBMIT — appends row to organizer's Google Sheet  (Batch 4)
 ════════════════════════════════════════════════════════════════ */
 router.post('/submit/:slug', async (req, res) => {

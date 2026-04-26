@@ -52,9 +52,10 @@ async function getAccessToken(refreshToken) {
 router.get('/data/:formId', verifyToken, async (req, res) => {
   try {
     // 1. Load form from Supabase
+    // 1. Load form from Supabase
     const { data: form, error: formErr } = await supabase
       .from('hx_forms')
-      .select('id, name, slug, status, config, sheet_id, drive_folder_id, submission_count')
+      .select('id, name, slug, status, config, dashboard_layout, sheet_id, drive_folder_id, submission_count')
       .eq('id', req.params.formId)
       .eq('user_id', req.user.googleId)
       .single();
@@ -71,6 +72,7 @@ router.get('/data/:formId', verifyToken, async (req, res) => {
         headers:         [],
         rows:            [],
         fields:          form.config?.fields || [],
+        layout:          form.dashboard_layout || [],
         noSheet:         true,
       });
     }
