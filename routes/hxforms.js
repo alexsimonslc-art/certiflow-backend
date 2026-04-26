@@ -484,6 +484,24 @@ router.post('/submit/:slug', async (req, res) => {
     const submissionId  = randomUUID();
     const submittedAt   = new Date().toISOString();
 
+    // Duplicate email check (when allowMultiple is false)
+    const allowMultiple = form.config?.settings?.allowMultiple;
+    if (!allowMultiple) {
+      const emailField = (form.config?.fields || []).find(f => f.type === 'email');
+      if (emailField) {
+        const emailVal = String(submittedData[emailField.id] || '').toLowerCase().trim();
+        if (emailVal) {
+          const emailLog = form.config?.emailLog || {};
+          if (emailLog[emailVal]) {
+            return res.status(409).json({
+              error: 'You are already registered. Each email address can only submit once.',
+              alreadyRegistered: true,
+            });
+          }
+        }
+      }
+    }
+
     const row = [
       submissionId,
       submittedAt,
@@ -593,7 +611,7 @@ router.post('/submit/:slug', async (req, res) => {
       }
     }
 
-    // 4. Increment submission_count + update optionCounts
+    // 4. Increment submission_count + update optionCounts + emailLog
     const newCounts = JSON.parse(JSON.stringify(optionCounts));
     for (const field of (liveConfig.fields || [])) {
       if (!['radio','dropdown'].includes(field.type)) continue;
@@ -603,10 +621,22 @@ router.post('/submit/:slug', async (req, res) => {
       if (!newCounts[field.id]) newCounts[field.id] = {};
       newCounts[field.id][submittedVal] = (newCounts[field.id][submittedVal] || 0) + 1;
     }
+    const updatedConfig = { ...liveConfig, optionCounts: newCounts };
+    // Record email so duplicate check works on next submission
+    if (!allowMultiple) {
+      const emailField = (liveConfig.fields || []).find(f => f.type === 'email');
+      if (emailField) {
+        const emailVal = String(submittedData[emailField.id] || '').toLowerCase().trim();
+        if (emailVal) {
+          if (!updatedConfig.emailLog) updatedConfig.emailLog = {};
+          updatedConfig.emailLog[emailVal] = submissionId;
+        }
+      }
+    }
     await supabase.from('hx_forms')
       .update({
         submission_count: (form.submission_count || 0) + 1,
-        config: { ...liveConfig, optionCounts: newCounts },
+        config: updatedConfig,
       })
       .eq('id', form.id);
 
