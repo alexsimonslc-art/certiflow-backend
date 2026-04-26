@@ -345,11 +345,9 @@ router.post('/publish/:id', verifyToken, async (req, res) => {
     }
 
     // Auto-generate passStaffCode if pass is enabled and none exists
-    let configNeedsUpdate = false;
     if (form.config?.settings?.passEnabled && !form.config?.settings?.passStaffCode) {
       const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
       form.config.settings.passStaffCode = Array.from({ length: 6 }, () => chars[Math.floor(Math.random() * chars.length)]).join('');
-      configNeedsUpdate = true;
       console.log(`[hxforms] Generated passStaffCode for form ${form.id}`);
     }
 
@@ -407,9 +405,9 @@ router.post('/publish/:id', verifyToken, async (req, res) => {
       sheet_id,
       drive_folder_id,
       uploads_folder_id,
+      config:            form.config, // always persist latest config (ensures passStaffCode is saved)
       updated_at:        new Date().toISOString(),
     };
-    if (configNeedsUpdate) publishPayload.config = form.config;
 
     const { data: updated, error: updateErr } = await supabase.from('hx_forms')
       .update(publishPayload)
@@ -514,6 +512,16 @@ router.post('/submit/:slug', async (req, res) => {
       }
     }
 
+    // ── Pre-generate pass token so it can be written to the sheet row ──
+    const passEnabled       = form.config?.settings?.passEnabled === true;
+    const passShowAttendance = form.config?.settings?.passShowAttendance === true;
+    const prePassToken = (passEnabled && passShowAttendance) ? randomUUID() : null;
+
+    // Append pass columns to row when attendance tracking is on
+    if (prePassToken) {
+      row.push(prePassToken, 'Pending', '', ''); // Pass Token | Attendance Status | Checked In At | Checked In By
+    }
+
     // 3. Write to Sheet (if sheet exists)
     let passResult = null;
     if (form.sheet_id) {
@@ -529,9 +537,9 @@ router.post('/submit/:slug', async (req, res) => {
           console.log(`[hxforms] Appended row to sheet ${form.sheet_id} for form ${form.id}`);
 
           // ── Generate entry pass if enabled ─────────────────────
-          if (form.config?.settings?.passEnabled === true && passSupabase) {
+          if (passEnabled && passSupabase) {
             try {
-              const passToken   = randomUUID();
+              const passToken   = prePassToken || randomUUID();
               const scannerUrl  = `${process.env.FRONTEND_URL}/hx-scanner.html?token=${passToken}`;
               const qrDataUrl   = await QRCode.toDataURL(scannerUrl, { width: 300, margin: 2, color: { dark: '#000000', light: '#ffffff' } });
 
