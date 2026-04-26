@@ -53,9 +53,10 @@ router.get('/data/:formId', verifyToken, async (req, res) => {
   try {
     // 1. Load form from Supabase
     // 1. Load form from Supabase
+    // 1. Load form from Supabase
     const { data: form, error: formErr } = await supabase
       .from('hx_forms')
-      .select('id, name, slug, status, config, dashboard_layout, sheet_id, drive_folder_id, submission_count')
+      .select('id, name, slug, status, config, dashboard_layout, sheet_id, drive_folder_id, submission_count') // <-- MUST INCLUDE dashboard_layout
       .eq('id', req.params.formId)
       .eq('user_id', req.user.googleId)
       .single();
@@ -137,13 +138,13 @@ function buildResponse(res, form, values) {
       headers:         [],
       rows:            [],
       fields:          form.config?.fields || [],
+      layout:          form.dashboard_layout || [] // <-- ADD THIS
     });
   }
 
   const headers = values[0] || [];
-  const rows    = values.slice(1);  // everything after the header row
-
-  // Normalize rows: ensure every row has same length as headers
+  const rows    = values.slice(1);
+  
   const normalRows = rows.map(row => {
     const r = [...row];
     while (r.length < headers.length) r.push('');
@@ -158,10 +159,10 @@ function buildResponse(res, form, values) {
     sheetId:         form.sheet_id,
     headers,
     rows:            normalRows,
-    fields:          form.config?.fields || [],  // used for chart generation
+    fields:          form.config?.fields || [],
+    layout:          form.dashboard_layout || [] // <-- AND ADD THIS
   });
 }
-
 /* ════════════════════════════════════════════════════════════════
    GET /api/hxdb/summary
    Light-weight: returns all forms with submission counts only.
