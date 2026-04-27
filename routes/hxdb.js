@@ -129,6 +129,10 @@ router.get('/data/:formId', verifyToken, async (req, res) => {
 
 /* ── Helper: build response from raw sheet values ─────────────── */
 function buildResponse(res, form, values) {
+  
+  // FOOLPROOF EXTRACTION: Check new column, fallback to embedded config
+  const savedLayout = form.dashboard_layout || (form.config && form.config.dashboard_layout) || [];
+
   if (values.length === 0) {
     return res.json({
       formName:        form.name,
@@ -138,7 +142,7 @@ function buildResponse(res, form, values) {
       headers:         [],
       rows:            [],
       fields:          form.config?.fields || [],
-      layout:          form.dashboard_layout || [] // <-- ADD THIS
+      layout:          savedLayout 
     });
   }
 
@@ -160,7 +164,7 @@ function buildResponse(res, form, values) {
     headers,
     rows:            normalRows,
     fields:          form.config?.fields || [],
-    layout:          form.dashboard_layout || [] // <-- AND ADD THIS
+    layout:          savedLayout 
   });
 }
 /* ════════════════════════════════════════════════════════════════
