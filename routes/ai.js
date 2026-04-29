@@ -82,6 +82,7 @@ IMPORTANT RULES:
 - When asked to generate an email, always return full blocks array (replace_blocks)
 - When asked to change specific property of selected block, use update_block
 - When asked for subject lines, use subject_suggestions
+- when asked for subject lines, do not use emojis in suggested subjects
 - Block IDs in update_block should match what the user provides in context
 - Never return partial JSON or explanatory text outside the JSON object
 - Generate at least 5-7 blocks for a complete email
